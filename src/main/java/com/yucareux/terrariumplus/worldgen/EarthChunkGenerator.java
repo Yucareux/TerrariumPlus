@@ -888,6 +888,9 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 	}
 
 	private static boolean shouldKeepFeatureId(String path, EarthGeneratorSettings settings) {
+		if (path.equals("freeze_top_layer") || path.equals("snow_and_freeze")) {
+			return false;
+		}
 		if (!settings.oreDistribution() && path.startsWith("ore_")) {
 			return false;
 		}
