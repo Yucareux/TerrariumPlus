@@ -123,7 +123,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 	public EarthChunkGenerator(BiomeSource biomeSource, EarthGeneratorSettings settings) {
 		super(biomeSource, biome -> generationSettingsForBiome(biome, settings));
 		this.settings = settings;
-		this.seaLevel = settings.heightOffset() + 1;
+		this.seaLevel = settings.resolveSeaLevel();
 		EarthGeneratorSettings.HeightLimits limits = EarthGeneratorSettings.resolveHeightLimits(settings);
 		this.minY = limits.minY();
 		this.height = limits.height();

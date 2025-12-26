@@ -80,21 +80,20 @@ public final class EarthBiomeSource extends BiomeSource {
 		int blockZ = QuartPos.toBlock(z);
 		int coverClass = LAND_COVER_SOURCE.sampleCoverClass(blockX, blockZ, this.settings.worldScale());
 
-		if (coverClass == ESA_NO_DATA) {
-			return this.ocean;
-		}
 		if (coverClass == ESA_SNOW_ICE) {
 			return this.frozenPeaks;
 		}
 		if (coverClass == ESA_MANGROVES) {
 			return this.mangrove;
 		}
-		if (coverClass == ESA_WATER) {
+		if (coverClass == ESA_NO_DATA || coverClass == ESA_WATER) {
 			WaterSurfaceResolver.WaterColumnData column = this.waterResolver.resolveColumnData(blockX, blockZ);
-			if (column.isOcean()) {
-				return this.ocean;
+			if (column.hasWater()) {
+				if (column.isOcean()) {
+					return this.ocean;
+				}
+				return this.river;
 			}
-			return this.river;
 		}
 
 		String koppen = KOPPEN_SOURCE.sampleDitheredCode(blockX, blockZ, this.settings.worldScale());

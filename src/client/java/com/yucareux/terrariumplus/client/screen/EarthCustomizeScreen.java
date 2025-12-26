@@ -74,6 +74,8 @@ public class EarthCustomizeScreen extends Screen {
 	private static final double AUTO_MAX_ALTITUDE = -1.0;
 	private static final double AUTO_MIN_ALTITUDE = EarthGeneratorSettings.MIN_WORLD_Y - 16.0;
 	private static final double ALTITUDE_AUTO_EPSILON = 0.5;
+	private static final double AUTO_SEA_LEVEL = -64.0;
+	private static final double SEA_LEVEL_AUTO_EPSILON = 0.5;
 	private static final @NonNull Identifier DYNAMIC_DIMENSION_TYPE_ID =
 			Objects.requireNonNull(Identifier.fromNamespaceAndPath("terrarium", "earth_dynamic"), "dynamicDimensionTypeId");
 	private static final @NonNull ResourceKey<DimensionType> DYNAMIC_DIMENSION_TYPE_KEY =
@@ -367,6 +369,7 @@ public class EarthCustomizeScreen extends Screen {
 				EarthGeneratorSettings.DEFAULT.terrestrialHeightScale());
 		double oceanicScale = this.findSliderValue("oceanic_height_scale", EarthGeneratorSettings.DEFAULT.oceanicHeightScale());
 		int heightOffset = (int) Math.round(this.findSliderValue("height_offset", EarthGeneratorSettings.DEFAULT.heightOffset()));
+		int seaLevel = this.resolveSeaLevelSetting("sea_level", AUTO_SEA_LEVEL);
 		boolean cinematicMode = this.findToggleValue("cinematic_mode", false);
 		int maxAltitude = this.resolveAltitudeSetting("max_altitude", AUTO_MAX_ALTITUDE);
 		int minAltitude = this.resolveAltitudeSetting("min_altitude", AUTO_MIN_ALTITUDE);
@@ -404,6 +407,7 @@ public class EarthCustomizeScreen extends Screen {
 				terrestrialScale,
 				oceanicScale,
 				heightOffset,
+				seaLevel,
 				this.spawnLatitude,
 				this.spawnLongitude,
 				minAltitude,
@@ -478,11 +482,10 @@ public class EarthCustomizeScreen extends Screen {
 				slider("oceanic_height_scale", 1.0, 0.0, 50.0, 0.5)
 						.withDisplay(EarthCustomizeScreen::formatMultiplier)
 						.withScale(SliderScale.power(3.0)),
-				slider("height_offset", 63.0, -63.0, 128.0, 1.0)
+				slider("height_offset", EarthGeneratorSettings.DEFAULT.heightOffset(), -63.0, 128.0, 1.0)
 						.withDisplay(EarthCustomizeScreen::formatHeightOffset),
-				slider("sea_level", EarthGeneratorSettings.DEFAULT.heightOffset(), -63.0, 256.0, 1.0)
-						.withDisplay(EarthCustomizeScreen::formatHeightOffset)
-						.locked(true),
+				slider("sea_level", AUTO_SEA_LEVEL, AUTO_SEA_LEVEL, 256.0, 1.0)
+						.withDisplay(EarthCustomizeScreen::formatSeaLevel),
 				slider("max_altitude", AUTO_MAX_ALTITUDE, AUTO_MAX_ALTITUDE, EarthGeneratorSettings.MAX_WORLD_Y, 16.0)
 						.withDisplay(EarthCustomizeScreen::formatMaxAltitude),
 				slider("min_altitude", AUTO_MIN_ALTITUDE, AUTO_MIN_ALTITUDE, EarthGeneratorSettings.MAX_WORLD_Y, 16.0)
@@ -593,6 +596,13 @@ public class EarthCustomizeScreen extends Screen {
 		return String.format(Locale.ROOT, "%.0f blocks", value);
 	}
 
+	private static String formatSeaLevel(double value) {
+		if (value <= AUTO_SEA_LEVEL + SEA_LEVEL_AUTO_EPSILON) {
+			return "Automatic";
+		}
+		return String.format(Locale.ROOT, "%.0f blocks", value);
+	}
+
 	private static String formatPercent(double value) {
 		return String.format(Locale.ROOT, "%.0f%%", value);
 	}
@@ -642,6 +652,14 @@ public class EarthCustomizeScreen extends Screen {
 		double value = this.findSliderValue(key, autoValue);
 		if (value <= autoValue + ALTITUDE_AUTO_EPSILON) {
 			return EarthGeneratorSettings.AUTO_ALTITUDE;
+		}
+		return (int) Math.round(value);
+	}
+
+	private int resolveSeaLevelSetting(String key, double autoValue) {
+		double value = this.findSliderValue(key, autoValue);
+		if (value <= autoValue + SEA_LEVEL_AUTO_EPSILON) {
+			return EarthGeneratorSettings.AUTO_SEA_LEVEL;
 		}
 		return (int) Math.round(value);
 	}

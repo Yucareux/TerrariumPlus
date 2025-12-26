@@ -51,7 +51,9 @@ public final class WaterSurfaceResolver {
 	private final TerrariumLandCoverSource landCoverSource;
 	private final TerrariumElevationSource elevationSource;
 	private final EarthGeneratorSettings settings;
+	private final boolean seaLevelAutomatic;
 	private final int seaLevel;
+	private final int datumSeaLevel;
 	private final Cache<Long, WaterRegionData> regionCache;
 	private final long regionSalt;
 	private final int shorelineShallowDistance;
@@ -75,7 +77,9 @@ public final class WaterSurfaceResolver {
 		this.landCoverSource = landCoverSource;
 		this.elevationSource = elevationSource;
 		this.settings = settings;
-		this.seaLevel = settings.heightOffset() + 1;
+		this.seaLevelAutomatic = settings.isSeaLevelAutomatic();
+		this.seaLevel = settings.resolveSeaLevel();
+		this.datumSeaLevel = settings.heightOffset();
 
 		this.shorelineShallowDistance = metersToBlocks(SHORELINE_SHALLOW_METERS);
 		this.shorelineMediumDistance = Math.max(
@@ -156,7 +160,7 @@ public final class WaterSurfaceResolver {
 		int gridMinZ = regionMinZ - this.regionMargin;
 		int gridArea = gridSize * gridSize;
 
-		boolean[] waterMask = new boolean[gridArea];
+		boolean[] baseWaterMask = new boolean[gridArea];
 		boolean[] noDataMask = new boolean[gridArea];
 		int[] surfaceHeights = new int[gridArea];
 
@@ -168,15 +172,10 @@ public final class WaterSurfaceResolver {
 				int coverClass = this.landCoverSource.sampleCoverClass(worldX, worldZ, this.settings.worldScale());
 				boolean isWater = coverClass == ESA_WATER || coverClass == ESA_NO_DATA;
 				int index = row + dx;
-				waterMask[index] = isWater;
+				baseWaterMask[index] = isWater;
 				noDataMask[index] = coverClass == ESA_NO_DATA;
 				surfaceHeights[index] = sampleSurfaceHeight(worldX, worldZ);
 			}
-		}
-
-		boolean[] landMask = new boolean[gridArea];
-		for (int index = 0; index < gridArea; index++) {
-			landMask[index] = !waterMask[index];
 		}
 
 		int[] componentIds = new int[gridArea];
@@ -185,7 +184,7 @@ public final class WaterSurfaceResolver {
 		int componentCount = 0;
 
 		for (int index = 0; index < gridArea; index++) {
-			if (!waterMask[index] || componentIds[index] != -1) {
+			if (!baseWaterMask[index] || componentIds[index] != -1) {
 				continue;
 			}
 			ComponentData component = buildComponent(
@@ -194,13 +193,345 @@ public final class WaterSurfaceResolver {
 					gridSize,
 					gridMinX,
 					gridMinZ,
-					waterMask,
+					baseWaterMask,
 					noDataMask,
 					surfaceHeights,
 					componentIds
 			);
 			components[componentCount] = component;
 			componentCount++;
+		}
+
+		if (useLegacyWaterBehavior()) {
+			return buildLegacyRegionData(
+					regionX,
+					regionZ,
+					regionMinX,
+					regionMinZ,
+					gridSize,
+					gridArea,
+					baseWaterMask,
+					surfaceHeights,
+					componentIds,
+					components,
+					componentCount,
+					startNanos
+			);
+		}
+
+		int[] waterSurface = new int[gridArea];
+		int[] terrainSurface = new int[gridArea];
+		byte[] waterFlags = new byte[gridArea];
+
+		System.arraycopy(surfaceHeights, 0, terrainSurface, 0, gridArea);
+
+		for (int i = 0; i < componentCount; i++) {
+			ComponentData component = components[i];
+			int spillHeight = component.borderHeights.isEmpty()
+					? component.averageHeight()
+					: percentile(component.borderHeights, BORDER_HEIGHT_PERCENTILE);
+			boolean oceanByNoData = component.touchesNoData
+					&& component.minHeight <= this.datumSeaLevel + this.oceanNoDataThreshold;
+			boolean isOcean = oceanByNoData || spillHeight <= this.datumSeaLevel;
+			component.isOcean = isOcean;
+			if (isOcean) {
+				fillComponentSurface(component, waterSurface, this.seaLevel);
+				continue;
+			}
+
+			int width = component.maxX - component.minX + 1;
+			int height = component.maxZ - component.minZ + 1;
+			int maxDim = Math.max(width, height);
+			int minDim = Math.max(1, Math.min(width, height));
+			double aspect = maxDim / (double) minDim;
+			boolean riverShape = maxDim >= this.riverMinLength
+					&& minDim <= this.riverMaxWidth
+					&& aspect >= RIVER_ASPECT_RATIO;
+			if (!riverShape && component.touchesEdge) {
+				riverShape = maxDim >= this.riverMinLength;
+			}
+			component.isRiver = riverShape;
+
+			int inlandSurface = spillHeight;
+			if (!riverShape) {
+				fillComponentSurface(component, waterSurface, inlandSurface);
+				continue;
+			}
+
+			RiverSurface riverSurface = buildRiverSurface(component, inlandSurface, gridSize);
+			for (int c = 0; c < component.cells.size(); c++) {
+				int cell = component.cells.getInt(c);
+				int x = cell % gridSize;
+				int z = cell / gridSize;
+				waterSurface[cell] = riverSurface.surfaceAt(x, z);
+			}
+		}
+
+		boolean[] inlandWaterMask = new boolean[gridArea];
+		boolean[] oceanComponentMask = new boolean[gridArea];
+		for (int i = 0; i < componentCount; i++) {
+			ComponentData component = components[i];
+			boolean ocean = component.isOcean;
+			for (int c = 0; c < component.cells.size(); c++) {
+				int cell = component.cells.getInt(c);
+				if (ocean) {
+					oceanComponentMask[cell] = true;
+				} else {
+					inlandWaterMask[cell] = true;
+				}
+			}
+		}
+
+		boolean[] oceanFloodMask = new boolean[gridArea];
+		if (this.seaLevel > this.datumSeaLevel) {
+			for (int index = 0; index < gridArea; index++) {
+				if (inlandWaterMask[index]) {
+					continue;
+				}
+				if (surfaceHeights[index] > this.seaLevel) {
+					continue;
+				}
+				oceanFloodMask[index] = true;
+			}
+		} else {
+			IntArrayList oceanQueue = new IntArrayList();
+			for (int index = 0; index < gridArea; index++) {
+				if (!oceanComponentMask[index]) {
+					continue;
+				}
+				if (surfaceHeights[index] > this.seaLevel) {
+					continue;
+				}
+				oceanFloodMask[index] = true;
+				oceanQueue.add(index);
+			}
+			for (int queueIndex = 0; queueIndex < oceanQueue.size(); queueIndex++) {
+				int index = oceanQueue.getInt(queueIndex);
+				int x = index % gridSize;
+				int z = index / gridSize;
+				for (int i = 0; i < NEIGHBOR_OFFSETS.length; i += 2) {
+					int nx = x + NEIGHBOR_OFFSETS[i];
+					int nz = z + NEIGHBOR_OFFSETS[i + 1];
+					if (nx < 0 || nz < 0 || nx >= gridSize || nz >= gridSize) {
+						continue;
+					}
+					int neighbor = nz * gridSize + nx;
+					if (oceanFloodMask[neighbor] || inlandWaterMask[neighbor]) {
+						continue;
+					}
+					if (surfaceHeights[neighbor] > this.seaLevel) {
+						continue;
+					}
+					oceanFloodMask[neighbor] = true;
+					oceanQueue.add(neighbor);
+				}
+			}
+		}
+
+		boolean[] waterMask = new boolean[gridArea];
+		for (int index = 0; index < gridArea; index++) {
+			waterMask[index] = oceanFloodMask[index] || inlandWaterMask[index];
+		}
+		boolean[] landMask = new boolean[gridArea];
+		for (int index = 0; index < gridArea; index++) {
+			landMask[index] = !waterMask[index];
+		}
+
+		IntArrayList shoreWater = new IntArrayList();
+		for (int index = 0; index < gridArea; index++) {
+			if (!waterMask[index]) {
+				continue;
+			}
+			int x = index % gridSize;
+			int z = index / gridSize;
+			if (isShoreCell(x, z, gridSize, waterMask)) {
+				shoreWater.add(index);
+			}
+		}
+
+		int[] waterDistanceCost = new int[gridArea];
+		computeWeightedDistance(
+				waterDistanceCost,
+				waterMask,
+				shoreWater,
+				gridSize,
+				this.maxDistanceToShore,
+				DIST_COST_CARDINAL
+		);
+		int maxDistanceCost = this.maxDistanceToShore * DIST_COST_CARDINAL;
+
+		for (int i = 0; i < componentCount; i++) {
+			ComponentData component = components[i];
+			component.maxDistanceCost = 0;
+			for (int c = 0; c < component.cells.size(); c++) {
+				int cell = component.cells.getInt(c);
+				int distanceCost = waterDistanceCost[cell];
+				if (distanceCost == Integer.MAX_VALUE) {
+					distanceCost = maxDistanceCost;
+				}
+				if (distanceCost > component.maxDistanceCost) {
+					component.maxDistanceCost = distanceCost;
+				}
+			}
+		}
+
+		for (int index = 0; index < gridArea; index++) {
+			if (!waterMask[index]) {
+				continue;
+			}
+			if (oceanFloodMask[index]) {
+				waterSurface[index] = this.seaLevel;
+				waterFlags[index] = WATER_OCEAN;
+				continue;
+			}
+			if (!inlandWaterMask[index]) {
+				continue;
+			}
+			int componentId = componentIds[index];
+			if (componentId < 0) {
+				continue;
+			}
+			ComponentData component = components[componentId];
+			int distanceCost = waterDistanceCost[index];
+			if (distanceCost == Integer.MAX_VALUE) {
+				distanceCost = maxDistanceCost;
+			}
+			double distance = distanceCost / (double) DIST_COST_CARDINAL;
+			int depth = component.isRiver
+					? computeDepth(distance, component.slopeStep)
+					: computeLakeDepth(distance, component.maxDistanceCost / (double) DIST_COST_CARDINAL);
+			int floor = waterSurface[index] - depth;
+			if (floor >= waterSurface[index]) {
+				floor = waterSurface[index] - 1;
+			}
+			terrainSurface[index] = floor;
+			waterFlags[index] = WATER_INLAND;
+		}
+
+		if (this.shoreBlendDistance > 0 && !shoreWater.isEmpty()) {
+			int[] landDistanceCost = new int[gridArea];
+			int[] nearestSurface = new int[gridArea];
+			boolean[] landSource = new boolean[gridArea];
+			IntArrayList shoreLand = new IntArrayList();
+			for (int i = 0; i < shoreWater.size(); i++) {
+				int waterIndex = shoreWater.getInt(i);
+				int x = waterIndex % gridSize;
+				int z = waterIndex / gridSize;
+				int sourceSurface = waterSurface[waterIndex];
+				for (int n = 0; n < NEIGHBOR_OFFSETS.length; n += 2) {
+					int nx = x + NEIGHBOR_OFFSETS[n];
+					int nz = z + NEIGHBOR_OFFSETS[n + 1];
+					if (nx < 0 || nz < 0 || nx >= gridSize || nz >= gridSize) {
+						continue;
+					}
+					int neighbor = nz * gridSize + nx;
+					if (!landMask[neighbor]) {
+						continue;
+					}
+					if (!landSource[neighbor]) {
+						landSource[neighbor] = true;
+						nearestSurface[neighbor] = sourceSurface;
+						shoreLand.add(neighbor);
+					}
+				}
+			}
+			computeWeightedDistanceWithSurface(
+					landDistanceCost,
+					nearestSurface,
+					landMask,
+					shoreLand,
+					gridSize,
+					this.shoreBlendDistance,
+					DIST_COST_CARDINAL
+			);
+			int maxBlendCost = this.shoreBlendDistance * DIST_COST_CARDINAL;
+
+			for (int index = 0; index < gridArea; index++) {
+				if (waterMask[index]) {
+					continue;
+				}
+				int distanceCost = landDistanceCost[index];
+				if (distanceCost == Integer.MAX_VALUE || distanceCost > maxBlendCost) {
+					continue;
+				}
+				double distance = distanceCost / (double) DIST_COST_CARDINAL;
+				double t = distance / (double) this.shoreBlendDistance;
+				int sourceSurface = nearestSurface[index];
+				int baseSurface = surfaceHeights[index];
+				int blended = (int) Math.round(Mth.lerp(t, sourceSurface, baseSurface));
+				if (blended < baseSurface) {
+					terrainSurface[index] = blended;
+				}
+			}
+		}
+
+		if (LAKE_SMOOTH_PASSES > 0) {
+			smoothLakeBeds(
+					terrainSurface,
+					waterSurface,
+					waterMask,
+					componentIds,
+					components,
+					componentCount,
+					waterDistanceCost,
+					gridSize
+			);
+		}
+
+		int[] regionTerrain = new int[REGION_SIZE * REGION_SIZE];
+		int[] regionWater = new int[REGION_SIZE * REGION_SIZE];
+		byte[] regionFlags = new byte[REGION_SIZE * REGION_SIZE];
+
+		for (int dz = 0; dz < REGION_SIZE; dz++) {
+			int worldZ = regionMinZ + dz;
+			int gridZ = worldZ - gridMinZ;
+			int gridRow = gridZ * gridSize;
+			int regionRow = dz * REGION_SIZE;
+			for (int dx = 0; dx < REGION_SIZE; dx++) {
+				int worldX = regionMinX + dx;
+				int gridX = worldX - gridMinX;
+				int gridIndex = gridRow + gridX;
+				int regionIndex = regionRow + dx;
+				int terrain = terrainSurface[gridIndex];
+				regionTerrain[regionIndex] = terrain;
+				byte flag = waterFlags[gridIndex];
+				regionFlags[regionIndex] = flag;
+				regionWater[regionIndex] = flag == WATER_NONE ? terrain : waterSurface[gridIndex];
+			}
+		}
+
+		if (DEBUG_WATER) {
+			long elapsed = System.nanoTime() - startNanos;
+			Terrarium.LOGGER.info(
+					"Water region {}:{} computed in {} ms (scale {}, margin {})",
+					regionX,
+					regionZ,
+					elapsed / 1_000_000L,
+					this.settings.worldScale(),
+					this.regionMargin
+			);
+		}
+
+		return new WaterRegionData(regionMinX, regionMinZ, regionTerrain, regionWater, regionFlags);
+	}
+
+	private WaterRegionData buildLegacyRegionData(
+			int regionX,
+			int regionZ,
+			int regionMinX,
+			int regionMinZ,
+			int gridSize,
+			int gridArea,
+			boolean[] waterMask,
+			int[] surfaceHeights,
+			int[] componentIds,
+			ComponentData[] components,
+			int componentCount,
+			long startNanos
+	) {
+		boolean[] landMask = new boolean[gridArea];
+		for (int index = 0; index < gridArea; index++) {
+			landMask[index] = !waterMask[index];
 		}
 
 		int[] waterSurface = new int[gridArea];
@@ -397,12 +728,12 @@ public final class WaterSurfaceResolver {
 
 		for (int dz = 0; dz < REGION_SIZE; dz++) {
 			int worldZ = regionMinZ + dz;
-			int gridZ = worldZ - gridMinZ;
+			int gridZ = worldZ - regionMinZ + this.regionMargin;
 			int gridRow = gridZ * gridSize;
 			int regionRow = dz * REGION_SIZE;
 			for (int dx = 0; dx < REGION_SIZE; dx++) {
 				int worldX = regionMinX + dx;
-				int gridX = worldX - gridMinX;
+				int gridX = worldX - regionMinX + this.regionMargin;
 				int gridIndex = gridRow + gridX;
 				int regionIndex = regionRow + dx;
 				int terrain = terrainSurface[gridIndex];
@@ -527,7 +858,7 @@ public final class WaterSurfaceResolver {
 		}
 
 		double length = Math.max(1.0, maxProj - minProj);
-		int flatSurface = Math.max(this.seaLevel + 1, Math.min(inlandSurface, component.maxHeight));
+		int flatSurface = Math.min(inlandSurface, component.maxHeight);
 		return new RiverSurface(minX, minZ, ux, uz, minProj, length, flatSurface, flatSurface);
 	}
 
@@ -793,6 +1124,10 @@ public final class WaterSurfaceResolver {
 		int index = (int) Math.floor(percentile * (sorted.length - 1));
 		index = Mth.clamp(index, 0, sorted.length - 1);
 		return sorted[index];
+	}
+
+	private boolean useLegacyWaterBehavior() {
+		return this.seaLevelAutomatic;
 	}
 
 	private static int regionCoord(int blockCoord) {

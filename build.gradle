@@ -10,6 +10,10 @@ base {
 	archivesName = project.archives_base_name
 }
 
+tasks.withType(AbstractArchiveTask).configureEach {
+	archiveVersion.set("")
+}
+
 repositories {
 	maven {
 		url = "https://api.modrinth.com/maven"
