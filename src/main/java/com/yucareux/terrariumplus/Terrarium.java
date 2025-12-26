@@ -127,6 +127,12 @@ public class Terrarium implements ModInitializer {
 		});
 
 		LOGGER.info("Terrarium worldgen initialized");
+		try {
+			// Integrate with Distant Horizons if present
+			com.yucareux.terrariumplus.integration.distant_horizons.DistantHorizonsIntegration.bootstrap();
+		} catch (Throwable e) {
+			LOGGER.error("Failed to load Distant Horizons integration", e);
+		}
 	}
 
 	private static int openGeoTpMap(CommandSourceStack source) {
