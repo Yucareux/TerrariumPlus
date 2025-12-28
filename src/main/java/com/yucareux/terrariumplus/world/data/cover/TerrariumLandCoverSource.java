@@ -32,10 +32,11 @@ public final class TerrariumLandCoverSource {
 	private static final double MAX_LON = 180.0;
 	private static final int TILE_DEGREES = 3;
 	private static final int SNOW_ICE_CLASS = 70;
-	private static final int MAX_CACHE_TILES = 8;
+	private static final int MAX_CACHE_TILES = intProperty("terrariumplus.landcover.cacheTiles", 24);
 	private static final double RESOLUTION_METERS = 10.0;
 	private static final double DOWNSAMPLE_START_PIXELS = 4.0;
 	private static final int MAX_DOWNSAMPLE_STEP = 256;
+	private static final int TILE_CACHE_ENTRIES = intProperty("terrariumplus.landcover.tileCacheEntries", 32);
 
 	private static final String ENDPOINT = "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map";
 	private static final String TILE_PATTERN = "ESA_WorldCover_10m_2021_v200_%s_Map.tif";
@@ -80,14 +81,33 @@ public final class TerrariumLandCoverSource {
 		double lon = blockX / blocksPerDegree;
 		double lat = -blockZ / blocksPerDegree;
 
-		if (lat < MIN_LAT || lat > MAX_LAT || lon < MIN_LON || lon > MAX_LON) {
+		TileKey key = tileKeyForLonLat(lon, lat);
+		if (key == null) {
 			return 0;
 		}
-
-		int tileLat = (int) Math.floor(lat / TILE_DEGREES) * TILE_DEGREES;
-		int tileLon = (int) Math.floor(lon / TILE_DEGREES) * TILE_DEGREES;
-		GeoTiffTile tile = getTile(new TileKey(tileLat, tileLon));
+		GeoTiffTile tile = getTile(key);
 		return tile.sample(lon, lat);
+	}
+
+	public void prefetchTiles(double blockX, double blockZ, double worldScale, int radius) {
+		TileKey center = tileKeyForBlock(blockX, blockZ, worldScale);
+		if (center == null) {
+			return;
+		}
+		int clampedRadius = Math.max(0, radius);
+		for (int dz = -clampedRadius; dz <= clampedRadius; dz++) {
+			int lat = center.lat() + dz * TILE_DEGREES;
+			if (lat < MIN_LAT || lat > MAX_LAT) {
+				continue;
+			}
+			for (int dx = -clampedRadius; dx <= clampedRadius; dx++) {
+				int lon = center.lon() + dx * TILE_DEGREES;
+				if (lon < MIN_LON || lon > MAX_LON) {
+					continue;
+				}
+				prefetchTile(new TileKey(lat, lon));
+			}
+		}
 	}
 
 	private static int downsampleStep(double worldScale, double resolutionMeters) {
@@ -109,6 +129,55 @@ public final class TerrariumLandCoverSource {
 		int block = Mth.floor(blockCoord);
 		int snapped = Math.floorDiv(block, step) * step;
 		return snapped + step * 0.5;
+	}
+
+	private static TileKey tileKeyForBlock(double blockX, double blockZ, double worldScale) {
+		if (worldScale <= 0.0) {
+			return null;
+		}
+		int step = downsampleStep(worldScale, RESOLUTION_METERS);
+		if (step > 1) {
+			blockX = downsampleBlock(blockX, step);
+			blockZ = downsampleBlock(blockZ, step);
+		}
+
+		double metersPerDegree = EQUATOR_CIRCUMFERENCE / 360.0;
+		double blocksPerDegree = metersPerDegree / worldScale;
+		double lon = blockX / blocksPerDegree;
+		double lat = -blockZ / blocksPerDegree;
+		return tileKeyForLonLat(lon, lat);
+	}
+
+	private static TileKey tileKeyForLonLat(double lon, double lat) {
+		if (lat < MIN_LAT || lat > MAX_LAT || lon < MIN_LON || lon > MAX_LON) {
+			return null;
+		}
+		int tileLat = (int) Math.floor(lat / TILE_DEGREES) * TILE_DEGREES;
+		int tileLon = (int) Math.floor(lon / TILE_DEGREES) * TILE_DEGREES;
+		return new TileKey(tileLat, tileLon);
+	}
+
+	private void prefetchTile(TileKey key) {
+		if (this.cache.getIfPresent(key) != null) {
+			return;
+		}
+		try {
+			this.cache.get(key);
+		} catch (Exception e) {
+			Terrarium.LOGGER.debug("Failed to prefetch land cover tile {}", key, e);
+		}
+	}
+
+	private static int intProperty(String key, int defaultValue) {
+		String value = System.getProperty(key);
+		if (value == null) {
+			return defaultValue;
+		}
+		try {
+			return Math.max(1, Integer.parseInt(value));
+		} catch (NumberFormatException ignored) {
+			return defaultValue;
+		}
 	}
 
 	private GeoTiffTile getTile(TileKey key) {
@@ -189,8 +258,6 @@ public final class TerrariumLandCoverSource {
 		private static final int TYPE_LONG = 4;
 
 		private static final int COMPRESSION_DEFLATE = 8;
-		private static final int MAX_TILE_CACHE = 16;
-
 		private static final GeoTiffTile MISSING = new GeoTiffTile();
 
 		private final Path path;
@@ -252,10 +319,10 @@ public final class TerrariumLandCoverSource {
 			this.pixelScaleY = pixelScaleY;
 			this.tieLon = tieLon;
 			this.tieLat = tieLat;
-			this.tileCache = new LinkedHashMap<>(MAX_TILE_CACHE, 0.75f, true) {
+			this.tileCache = new LinkedHashMap<>(TILE_CACHE_ENTRIES, 0.75f, true) {
 				@Override
 				protected boolean removeEldestEntry(Map.Entry<Integer, byte[]> eldest) {
-					return size() > MAX_TILE_CACHE;
+					return size() > TILE_CACHE_ENTRIES;
 				}
 			};
 		}

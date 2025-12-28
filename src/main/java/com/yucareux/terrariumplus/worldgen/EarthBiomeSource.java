@@ -4,7 +4,6 @@ import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import com.yucareux.terrariumplus.world.data.biome.BiomeClassification;
 import com.yucareux.terrariumplus.world.data.cover.TerrariumLandCoverSource;
-import com.yucareux.terrariumplus.world.data.elevation.TerrariumElevationSource;
 import com.yucareux.terrariumplus.world.data.koppen.TerrariumKoppenSource;
 import java.util.HashSet;
 import java.util.Objects;
@@ -34,9 +33,8 @@ public final class EarthBiomeSource extends BiomeSource {
 	private static final int ESA_MANGROVES = 95;
 	private static final int ESA_NO_DATA = 0;
 
-	private static final TerrariumLandCoverSource LAND_COVER_SOURCE = new TerrariumLandCoverSource();
-	private static final TerrariumKoppenSource KOPPEN_SOURCE = new TerrariumKoppenSource();
-	private static final TerrariumElevationSource ELEVATION_SOURCE = new TerrariumElevationSource();
+	private static final TerrariumLandCoverSource LAND_COVER_SOURCE = TerrariumWorldgenSources.landCover();
+	private static final TerrariumKoppenSource KOPPEN_SOURCE = TerrariumWorldgenSources.koppen();
 
 	private final @NonNull HolderGetter<Biome> biomeLookup;
 	private final @NonNull EarthGeneratorSettings settings;
@@ -56,7 +54,7 @@ public final class EarthBiomeSource extends BiomeSource {
 		this.river = resolveBiome(Biomes.RIVER, this.plains);
 		this.frozenPeaks = resolveBiome(Biomes.FROZEN_PEAKS, this.plains);
 		this.mangrove = resolveBiome(Biomes.MANGROVE_SWAMP, this.plains);
-		this.waterResolver = new WaterSurfaceResolver(LAND_COVER_SOURCE, ELEVATION_SOURCE, this.settings);
+		this.waterResolver = TerrariumWorldgenSources.waterResolver(this.settings);
 		this.possibleBiomes = buildPossibleBiomes();
 	}
 

@@ -7,7 +7,6 @@ import com.yucareux.terrariumplus.world.data.cover.TerrariumLandCoverSource;
 import com.yucareux.terrariumplus.world.data.elevation.TerrariumElevationSource;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import java.util.Arrays;
-import java.util.PriorityQueue;
 import net.minecraft.util.Mth;
 
 public final class WaterSurfaceResolver {
@@ -34,6 +33,7 @@ public final class WaterSurfaceResolver {
 	private static final double BORDER_HEIGHT_PERCENTILE = 0.10;
 	private static final double OCEAN_NO_DATA_THRESHOLD_METERS = 5.0;
 	private static final int LAKE_SMOOTH_PASSES = 1;
+	private static final int MAX_REGION_MARGIN_BLOCKS = 512;
 
 	private static final int DIST_COST_CARDINAL = 10;
 	private static final int DIST_COST_DIAGONAL = 14;
@@ -47,6 +47,7 @@ public final class WaterSurfaceResolver {
 			DIST_COST_DIAGONAL, DIST_COST_DIAGONAL, DIST_COST_DIAGONAL, DIST_COST_DIAGONAL
 	};
 	private static final boolean DEBUG_WATER = Boolean.getBoolean("terrariumplus.debugWater");
+	private static final ThreadLocal<RegionScratch> REGION_SCRATCH = ThreadLocal.withInitial(RegionScratch::new);
 
 	private final TerrariumLandCoverSource landCoverSource;
 	private final TerrariumElevationSource elevationSource;
@@ -67,6 +68,7 @@ public final class WaterSurfaceResolver {
 	private final int oceanNoDataThreshold;
 	private final int maxDistanceToShore;
 	private final int regionMargin;
+	private final boolean regionClamped;
 	private final WaterInfo oceanInfo;
 
 	public WaterSurfaceResolver(
@@ -95,7 +97,9 @@ public final class WaterSurfaceResolver {
 		this.oceanNoDataThreshold = metersToBlocks(OCEAN_NO_DATA_THRESHOLD_METERS);
 		this.maxDistanceToShore = this.shorelineMediumDistance
 				+ MAX_SLOPE_STEP * Math.max(0, this.maxWaterDepth - this.depthMediumBlocks);
-		this.regionMargin = Math.max(this.maxDistanceToShore, this.shoreBlendDistance) + 2;
+		int rawRegionMargin = Math.max(this.maxDistanceToShore, this.shoreBlendDistance) + 2;
+		this.regionMargin = Math.min(rawRegionMargin, MAX_REGION_MARGIN_BLOCKS);
+		this.regionClamped = rawRegionMargin > this.regionMargin;
 
 		this.regionCache = CacheBuilder.newBuilder()
 				.maximumSize(MAX_REGION_CACHE)
@@ -111,6 +115,12 @@ public final class WaterSurfaceResolver {
 	public WaterChunkData resolveChunkWaterData(int chunkX, int chunkZ) {
 		WaterRegionData region = resolveRegionData(regionCoord(chunkX << 4), regionCoord(chunkZ << 4));
 		return new WaterChunkData(chunkX, chunkZ, region);
+	}
+
+	public void prefetchRegionsForChunk(int chunkX, int chunkZ, int radius) {
+		int blockX = chunkX << 4;
+		int blockZ = chunkZ << 4;
+		prefetchRegionsForBlock(blockX, blockZ, radius);
 	}
 
 	public WaterInfo resolveWaterInfo(int blockX, int blockZ, int coverClass) {
@@ -140,15 +150,37 @@ public final class WaterSurfaceResolver {
 		return region.columnData(blockX, blockZ);
 	}
 
+	public void prefetchRegionsForBlock(int blockX, int blockZ, int radius) {
+		int regionX = regionCoord(blockX);
+		int regionZ = regionCoord(blockZ);
+		int clampedRadius = Math.max(0, radius);
+		for (int dz = -clampedRadius; dz <= clampedRadius; dz++) {
+			for (int dx = -clampedRadius; dx <= clampedRadius; dx++) {
+				prefetchRegion(regionX + dx, regionZ + dz);
+			}
+		}
+	}
+
+	private void prefetchRegion(int regionX, int regionZ) {
+		long key = pack(regionX, regionZ) ^ this.regionSalt;
+		if (this.regionCache.getIfPresent(key) != null) {
+			return;
+		}
+		try {
+			this.regionCache.get(key, () -> buildRegionData(regionX, regionZ));
+		} catch (Exception e) {
+			Terrarium.LOGGER.debug("Failed to prefetch water region {}:{}", regionX, regionZ, e);
+		}
+	}
+
 	private WaterRegionData resolveRegionData(int regionX, int regionZ) {
 		long key = pack(regionX, regionZ) ^ this.regionSalt;
-		WaterRegionData cached = this.regionCache.getIfPresent(key);
-		if (cached != null) {
-			return cached;
+		try {
+			return this.regionCache.get(key, () -> buildRegionData(regionX, regionZ));
+		} catch (Exception e) {
+			Terrarium.LOGGER.warn("Failed to build water region {}:{}", regionX, regionZ, e);
+			return buildRegionData(regionX, regionZ);
 		}
-		WaterRegionData built = buildRegionData(regionX, regionZ);
-		this.regionCache.put(key, built);
-		return built;
 	}
 
 	private WaterRegionData buildRegionData(int regionX, int regionZ) {
@@ -159,10 +191,13 @@ public final class WaterSurfaceResolver {
 		int gridMinX = regionMinX - this.regionMargin;
 		int gridMinZ = regionMinZ - this.regionMargin;
 		int gridArea = gridSize * gridSize;
-
-		boolean[] baseWaterMask = new boolean[gridArea];
-		boolean[] noDataMask = new boolean[gridArea];
-		int[] surfaceHeights = new int[gridArea];
+		RegionScratch scratch = REGION_SCRATCH.get();
+		scratch.ensureCapacity(gridArea);
+		scratch.resetLists();
+		boolean[] baseWaterMask = scratch.baseWaterMask;
+		boolean[] noDataMask = scratch.noDataMask;
+		int[] surfaceHeights = scratch.surfaceHeights;
+		boolean hasWater = false;
 
 		for (int dz = 0; dz < gridSize; dz++) {
 			int worldZ = gridMinZ + dz;
@@ -175,12 +210,29 @@ public final class WaterSurfaceResolver {
 				baseWaterMask[index] = isWater;
 				noDataMask[index] = coverClass == ESA_NO_DATA;
 				surfaceHeights[index] = sampleSurfaceHeight(worldX, worldZ);
+				if (isWater) {
+					hasWater = true;
+				}
 			}
 		}
 
-		int[] componentIds = new int[gridArea];
-		Arrays.fill(componentIds, -1);
-		ComponentData[] components = new ComponentData[gridArea];
+		if (!hasWater && this.seaLevel <= this.datumSeaLevel) {
+			return buildDryRegionData(
+					regionX,
+					regionZ,
+					regionMinX,
+					regionMinZ,
+					gridMinX,
+					gridMinZ,
+					gridSize,
+					surfaceHeights,
+					startNanos
+			);
+		}
+
+		int[] componentIds = scratch.componentIds;
+		Arrays.fill(componentIds, 0, gridArea, -1);
+		ComponentData[] components = scratch.components;
 		int componentCount = 0;
 
 		for (int index = 0; index < gridArea; index++) {
@@ -219,9 +271,10 @@ public final class WaterSurfaceResolver {
 			);
 		}
 
-		int[] waterSurface = new int[gridArea];
-		int[] terrainSurface = new int[gridArea];
-		byte[] waterFlags = new byte[gridArea];
+		int[] waterSurface = scratch.waterSurface;
+		int[] terrainSurface = scratch.terrainSurface;
+		byte[] waterFlags = scratch.waterFlags;
+		Arrays.fill(waterFlags, 0, gridArea, WATER_NONE);
 
 		System.arraycopy(surfaceHeights, 0, terrainSurface, 0, gridArea);
 
@@ -247,7 +300,7 @@ public final class WaterSurfaceResolver {
 			boolean riverShape = maxDim >= this.riverMinLength
 					&& minDim <= this.riverMaxWidth
 					&& aspect >= RIVER_ASPECT_RATIO;
-			if (!riverShape && component.touchesEdge) {
+			if (!riverShape && component.touchesEdge && !this.regionClamped) {
 				riverShape = maxDim >= this.riverMinLength;
 			}
 			component.isRiver = riverShape;
@@ -267,8 +320,10 @@ public final class WaterSurfaceResolver {
 			}
 		}
 
-		boolean[] inlandWaterMask = new boolean[gridArea];
-		boolean[] oceanComponentMask = new boolean[gridArea];
+		boolean[] inlandWaterMask = scratch.inlandWaterMask;
+		boolean[] oceanComponentMask = scratch.oceanComponentMask;
+		Arrays.fill(inlandWaterMask, 0, gridArea, false);
+		Arrays.fill(oceanComponentMask, 0, gridArea, false);
 		for (int i = 0; i < componentCount; i++) {
 			ComponentData component = components[i];
 			boolean ocean = component.isOcean;
@@ -282,7 +337,8 @@ public final class WaterSurfaceResolver {
 			}
 		}
 
-		boolean[] oceanFloodMask = new boolean[gridArea];
+		boolean[] oceanFloodMask = scratch.oceanFloodMask;
+		Arrays.fill(oceanFloodMask, 0, gridArea, false);
 		if (this.seaLevel > this.datumSeaLevel) {
 			for (int index = 0; index < gridArea; index++) {
 				if (inlandWaterMask[index]) {
@@ -294,7 +350,8 @@ public final class WaterSurfaceResolver {
 				oceanFloodMask[index] = true;
 			}
 		} else {
-			IntArrayList oceanQueue = new IntArrayList();
+			IntArrayList oceanQueue = scratch.oceanQueue;
+			oceanQueue.clear();
 			for (int index = 0; index < gridArea; index++) {
 				if (!oceanComponentMask[index]) {
 					continue;
@@ -328,16 +385,17 @@ public final class WaterSurfaceResolver {
 			}
 		}
 
-		boolean[] waterMask = new boolean[gridArea];
+		boolean[] waterMask = scratch.waterMask;
 		for (int index = 0; index < gridArea; index++) {
 			waterMask[index] = oceanFloodMask[index] || inlandWaterMask[index];
 		}
-		boolean[] landMask = new boolean[gridArea];
+		boolean[] landMask = scratch.landMask;
 		for (int index = 0; index < gridArea; index++) {
 			landMask[index] = !waterMask[index];
 		}
 
-		IntArrayList shoreWater = new IntArrayList();
+		IntArrayList shoreWater = scratch.shoreWater;
+		shoreWater.clear();
 		for (int index = 0; index < gridArea; index++) {
 			if (!waterMask[index]) {
 				continue;
@@ -349,7 +407,7 @@ public final class WaterSurfaceResolver {
 			}
 		}
 
-		int[] waterDistanceCost = new int[gridArea];
+		int[] waterDistanceCost = scratch.waterDistanceCost;
 		computeWeightedDistance(
 				waterDistanceCost,
 				waterMask,
@@ -409,10 +467,12 @@ public final class WaterSurfaceResolver {
 		}
 
 		if (this.shoreBlendDistance > 0 && !shoreWater.isEmpty()) {
-			int[] landDistanceCost = new int[gridArea];
-			int[] nearestSurface = new int[gridArea];
-			boolean[] landSource = new boolean[gridArea];
-			IntArrayList shoreLand = new IntArrayList();
+			int[] landDistanceCost = scratch.landDistanceCost;
+			int[] nearestSurface = scratch.nearestSurface;
+			boolean[] landSource = scratch.landSource;
+			Arrays.fill(landSource, 0, gridArea, false);
+			IntArrayList shoreLand = scratch.shoreLand;
+			shoreLand.clear();
 			for (int i = 0; i < shoreWater.size(); i++) {
 				int waterIndex = shoreWater.getInt(i);
 				int x = waterIndex % gridSize;
@@ -512,6 +572,7 @@ public final class WaterSurfaceResolver {
 			);
 		}
 
+		clearComponents(components, componentCount);
 		return new WaterRegionData(regionMinX, regionMinZ, regionTerrain, regionWater, regionFlags);
 	}
 
@@ -529,14 +590,18 @@ public final class WaterSurfaceResolver {
 			int componentCount,
 			long startNanos
 	) {
-		boolean[] landMask = new boolean[gridArea];
+		RegionScratch scratch = REGION_SCRATCH.get();
+		scratch.ensureCapacity(gridArea);
+		scratch.resetLists();
+		boolean[] landMask = scratch.landMask;
 		for (int index = 0; index < gridArea; index++) {
 			landMask[index] = !waterMask[index];
 		}
 
-		int[] waterSurface = new int[gridArea];
-		int[] terrainSurface = new int[gridArea];
-		byte[] waterFlags = new byte[gridArea];
+		int[] waterSurface = scratch.waterSurface;
+		int[] terrainSurface = scratch.terrainSurface;
+		byte[] waterFlags = scratch.waterFlags;
+		Arrays.fill(waterFlags, 0, gridArea, WATER_NONE);
 
 		for (int index = 0; index < gridArea; index++) {
 			if (!waterMask[index]) {
@@ -566,7 +631,7 @@ public final class WaterSurfaceResolver {
 			boolean riverShape = maxDim >= this.riverMinLength
 					&& minDim <= this.riverMaxWidth
 					&& aspect >= RIVER_ASPECT_RATIO;
-			if (!riverShape && component.touchesEdge) {
+			if (!riverShape && component.touchesEdge && !this.regionClamped) {
 				riverShape = maxDim >= this.riverMinLength;
 			}
 			component.isRiver = riverShape;
@@ -586,7 +651,8 @@ public final class WaterSurfaceResolver {
 			}
 		}
 
-		IntArrayList shoreWater = new IntArrayList();
+		IntArrayList shoreWater = scratch.shoreWater;
+		shoreWater.clear();
 		for (int index = 0; index < gridArea; index++) {
 			if (!waterMask[index]) {
 				continue;
@@ -598,7 +664,7 @@ public final class WaterSurfaceResolver {
 			}
 		}
 
-		int[] waterDistanceCost = new int[gridArea];
+		int[] waterDistanceCost = scratch.waterDistanceCost;
 		computeWeightedDistance(
 				waterDistanceCost,
 				waterMask,
@@ -653,10 +719,12 @@ public final class WaterSurfaceResolver {
 		}
 
 		if (this.shoreBlendDistance > 0 && !shoreWater.isEmpty()) {
-			int[] landDistanceCost = new int[gridArea];
-			int[] nearestSurface = new int[gridArea];
-			boolean[] landSource = new boolean[gridArea];
-			IntArrayList shoreLand = new IntArrayList();
+			int[] landDistanceCost = scratch.landDistanceCost;
+			int[] nearestSurface = scratch.nearestSurface;
+			boolean[] landSource = scratch.landSource;
+			Arrays.fill(landSource, 0, gridArea, false);
+			IntArrayList shoreLand = scratch.shoreLand;
+			shoreLand.clear();
 			for (int i = 0; i < shoreWater.size(); i++) {
 				int waterIndex = shoreWater.getInt(i);
 				int x = waterIndex % gridSize;
@@ -741,6 +809,54 @@ public final class WaterSurfaceResolver {
 				byte flag = waterFlags[gridIndex];
 				regionFlags[regionIndex] = flag;
 				regionWater[regionIndex] = flag == WATER_NONE ? terrain : waterSurface[gridIndex];
+			}
+		}
+
+		if (DEBUG_WATER) {
+			long elapsed = System.nanoTime() - startNanos;
+			Terrarium.LOGGER.info(
+					"Water region {}:{} computed in {} ms (scale {}, margin {})",
+					regionX,
+					regionZ,
+					elapsed / 1_000_000L,
+					this.settings.worldScale(),
+					this.regionMargin
+			);
+		}
+
+		clearComponents(components, componentCount);
+		return new WaterRegionData(regionMinX, regionMinZ, regionTerrain, regionWater, regionFlags);
+	}
+
+	private WaterRegionData buildDryRegionData(
+			int regionX,
+			int regionZ,
+			int regionMinX,
+			int regionMinZ,
+			int gridMinX,
+			int gridMinZ,
+			int gridSize,
+			int[] surfaceHeights,
+			long startNanos
+	) {
+		int[] regionTerrain = new int[REGION_SIZE * REGION_SIZE];
+		int[] regionWater = new int[REGION_SIZE * REGION_SIZE];
+		byte[] regionFlags = new byte[REGION_SIZE * REGION_SIZE];
+
+		for (int dz = 0; dz < REGION_SIZE; dz++) {
+			int worldZ = regionMinZ + dz;
+			int gridZ = worldZ - gridMinZ;
+			int gridRow = gridZ * gridSize;
+			int regionRow = dz * REGION_SIZE;
+			for (int dx = 0; dx < REGION_SIZE; dx++) {
+				int worldX = regionMinX + dx;
+				int gridX = worldX - gridMinX;
+				int gridIndex = gridRow + gridX;
+				int regionIndex = regionRow + dx;
+				int terrain = surfaceHeights[gridIndex];
+				regionTerrain[regionIndex] = terrain;
+				regionWater[regionIndex] = terrain;
+				regionFlags[regionIndex] = WATER_NONE;
 			}
 		}
 
@@ -949,6 +1065,12 @@ public final class WaterSurfaceResolver {
 		}
 	}
 
+	private static void clearComponents(ComponentData[] components, int count) {
+		for (int i = 0; i < count; i++) {
+			components[i] = null;
+		}
+	}
+
 	private boolean isShoreCell(int x, int z, int gridSize, boolean[] waterMask) {
 		for (int i = 0; i < NEIGHBOR_OFFSETS.length; i += 2) {
 			int nx = x + NEIGHBOR_OFFSETS[i];
@@ -978,13 +1100,20 @@ public final class WaterSurfaceResolver {
 			int maxDistanceBlocks,
 			int initialCost
 	) {
-		Arrays.fill(distances, Integer.MAX_VALUE);
+		int gridArea = gridSize * gridSize;
+		Arrays.fill(distances, 0, gridArea, Integer.MAX_VALUE);
 		if (sources.isEmpty()) {
 			return;
 		}
 		int maxCost = Math.max(0, maxDistanceBlocks) * DIST_COST_CARDINAL;
-		PriorityQueue<Long> queue = new PriorityQueue<>();
+		RegionScratch scratch = REGION_SCRATCH.get();
+		scratch.ensureBucketCapacity(maxCost + 1);
+		IntArrayList[] buckets = scratch.buckets;
+		boolean[] bucketUsed = scratch.bucketUsed;
+		IntArrayList usedBuckets = scratch.usedBuckets;
+		usedBuckets.clear();
 
+		int minCost = Integer.MAX_VALUE;
 		for (int i = 0; i < sources.size(); i++) {
 			int index = sources.getInt(i);
 			if (!allowed[index]) {
@@ -996,39 +1125,53 @@ public final class WaterSurfaceResolver {
 			}
 			if (cost < distances[index]) {
 				distances[index] = cost;
-				queue.add(packCost(cost, index));
+				addBucket(buckets, bucketUsed, usedBuckets, cost, index);
+				if (cost < minCost) {
+					minCost = cost;
+				}
 			}
 		}
 
-		while (!queue.isEmpty()) {
-			long entry = queue.poll();
-			int cost = (int) (entry >>> 32);
-			int index = (int) entry;
-			if (cost != distances[index]) {
-				continue;
-			}
-			if (cost >= maxCost) {
-				continue;
-			}
-			int x = index % gridSize;
-			int z = index / gridSize;
-			for (int i = 0; i < NEIGHBOR_OFFSETS_8.length; i += 2) {
-				int nx = x + NEIGHBOR_OFFSETS_8[i];
-				int nz = z + NEIGHBOR_OFFSETS_8[i + 1];
-				if (nx < 0 || nz < 0 || nx >= gridSize || nz >= gridSize) {
-					continue;
-				}
-				int neighbor = nz * gridSize + nx;
-				if (!allowed[neighbor]) {
-					continue;
-				}
-				int nextCost = cost + NEIGHBOR_COSTS_8[i / 2];
-				if (nextCost < distances[neighbor] && nextCost <= maxCost) {
-					distances[neighbor] = nextCost;
-					queue.add(packCost(nextCost, neighbor));
-				}
-			}
+		if (minCost == Integer.MAX_VALUE) {
+			clearBuckets(buckets, bucketUsed, usedBuckets);
+			return;
 		}
+
+		for (int cost = minCost; cost <= maxCost; cost++) {
+			IntArrayList bucket = buckets[cost];
+			if (bucket == null || bucket.isEmpty()) {
+				continue;
+			}
+			for (int bucketIndex = 0; bucketIndex < bucket.size(); bucketIndex++) {
+				int index = bucket.getInt(bucketIndex);
+				if (cost != distances[index]) {
+					continue;
+				}
+				if (cost >= maxCost) {
+					continue;
+				}
+				int x = index % gridSize;
+				int z = index / gridSize;
+				for (int i = 0; i < NEIGHBOR_OFFSETS_8.length; i += 2) {
+					int nx = x + NEIGHBOR_OFFSETS_8[i];
+					int nz = z + NEIGHBOR_OFFSETS_8[i + 1];
+					if (nx < 0 || nz < 0 || nx >= gridSize || nz >= gridSize) {
+						continue;
+					}
+					int neighbor = nz * gridSize + nx;
+					if (!allowed[neighbor]) {
+						continue;
+					}
+					int nextCost = cost + NEIGHBOR_COSTS_8[i / 2];
+					if (nextCost < distances[neighbor] && nextCost <= maxCost) {
+						distances[neighbor] = nextCost;
+						addBucket(buckets, bucketUsed, usedBuckets, nextCost, neighbor);
+					}
+				}
+			}
+			bucket.clear();
+		}
+		clearBuckets(buckets, bucketUsed, usedBuckets);
 	}
 
 	private void computeWeightedDistanceWithSurface(
@@ -1040,13 +1183,20 @@ public final class WaterSurfaceResolver {
 			int maxDistanceBlocks,
 			int initialCost
 	) {
-		Arrays.fill(distances, Integer.MAX_VALUE);
+		int gridArea = gridSize * gridSize;
+		Arrays.fill(distances, 0, gridArea, Integer.MAX_VALUE);
 		if (sources.isEmpty()) {
 			return;
 		}
 		int maxCost = Math.max(0, maxDistanceBlocks) * DIST_COST_CARDINAL;
-		PriorityQueue<Long> queue = new PriorityQueue<>();
+		RegionScratch scratch = REGION_SCRATCH.get();
+		scratch.ensureBucketCapacity(maxCost + 1);
+		IntArrayList[] buckets = scratch.buckets;
+		boolean[] bucketUsed = scratch.bucketUsed;
+		IntArrayList usedBuckets = scratch.usedBuckets;
+		usedBuckets.clear();
 
+		int minCost = Integer.MAX_VALUE;
 		for (int i = 0; i < sources.size(); i++) {
 			int index = sources.getInt(i);
 			if (!allowed[index]) {
@@ -1058,45 +1208,91 @@ public final class WaterSurfaceResolver {
 			}
 			if (cost < distances[index]) {
 				distances[index] = cost;
-				queue.add(packCost(cost, index));
+				addBucket(buckets, bucketUsed, usedBuckets, cost, index);
+				if (cost < minCost) {
+					minCost = cost;
+				}
 			}
 		}
 
-		while (!queue.isEmpty()) {
-			long entry = queue.poll();
-			int cost = (int) (entry >>> 32);
-			int index = (int) entry;
-			if (cost != distances[index]) {
-				continue;
-			}
-			if (cost >= maxCost) {
-				continue;
-			}
-			int x = index % gridSize;
-			int z = index / gridSize;
-			int sourceSurface = nearestSurface[index];
-			for (int i = 0; i < NEIGHBOR_OFFSETS_8.length; i += 2) {
-				int nx = x + NEIGHBOR_OFFSETS_8[i];
-				int nz = z + NEIGHBOR_OFFSETS_8[i + 1];
-				if (nx < 0 || nz < 0 || nx >= gridSize || nz >= gridSize) {
-					continue;
-				}
-				int neighbor = nz * gridSize + nx;
-				if (!allowed[neighbor]) {
-					continue;
-				}
-				int nextCost = cost + NEIGHBOR_COSTS_8[i / 2];
-				if (nextCost < distances[neighbor] && nextCost <= maxCost) {
-					distances[neighbor] = nextCost;
-					nearestSurface[neighbor] = sourceSurface;
-					queue.add(packCost(nextCost, neighbor));
-				}
-			}
+		if (minCost == Integer.MAX_VALUE) {
+			clearBuckets(buckets, bucketUsed, usedBuckets);
+			return;
 		}
+
+		for (int cost = minCost; cost <= maxCost; cost++) {
+			IntArrayList bucket = buckets[cost];
+			if (bucket == null || bucket.isEmpty()) {
+				continue;
+			}
+			for (int bucketIndex = 0; bucketIndex < bucket.size(); bucketIndex++) {
+				int index = bucket.getInt(bucketIndex);
+				if (cost != distances[index]) {
+					continue;
+				}
+				if (cost >= maxCost) {
+					continue;
+				}
+				int x = index % gridSize;
+				int z = index / gridSize;
+				int sourceSurface = nearestSurface[index];
+				for (int i = 0; i < NEIGHBOR_OFFSETS_8.length; i += 2) {
+					int nx = x + NEIGHBOR_OFFSETS_8[i];
+					int nz = z + NEIGHBOR_OFFSETS_8[i + 1];
+					if (nx < 0 || nz < 0 || nx >= gridSize || nz >= gridSize) {
+						continue;
+					}
+					int neighbor = nz * gridSize + nx;
+					if (!allowed[neighbor]) {
+						continue;
+					}
+					int nextCost = cost + NEIGHBOR_COSTS_8[i / 2];
+					if (nextCost < distances[neighbor] && nextCost <= maxCost) {
+						distances[neighbor] = nextCost;
+						nearestSurface[neighbor] = sourceSurface;
+						addBucket(buckets, bucketUsed, usedBuckets, nextCost, neighbor);
+					}
+				}
+			}
+			bucket.clear();
+		}
+		clearBuckets(buckets, bucketUsed, usedBuckets);
 	}
 
-	private static long packCost(int cost, int index) {
-		return ((long) cost << 32) | (index & 0xffffffffL);
+	private static void addBucket(
+			IntArrayList[] buckets,
+			boolean[] bucketUsed,
+			IntArrayList usedBuckets,
+			int cost,
+			int index
+	) {
+		IntArrayList bucket = buckets[cost];
+		if (bucket == null) {
+			bucket = new IntArrayList();
+			buckets[cost] = bucket;
+		}
+		if (!bucketUsed[cost]) {
+			bucket.clear();
+			bucketUsed[cost] = true;
+			usedBuckets.add(cost);
+		}
+		bucket.add(index);
+	}
+
+	private static void clearBuckets(
+			IntArrayList[] buckets,
+			boolean[] bucketUsed,
+			IntArrayList usedBuckets
+	) {
+		for (int i = 0; i < usedBuckets.size(); i++) {
+			int cost = usedBuckets.getInt(i);
+			IntArrayList bucket = buckets[cost];
+			if (bucket != null) {
+				bucket.clear();
+			}
+			bucketUsed[cost] = false;
+		}
+		usedBuckets.clear();
 	}
 
 	private int sampleSurfaceHeight(double blockX, double blockZ) {
@@ -1119,11 +1315,121 @@ public final class WaterSurfaceResolver {
 	}
 
 	private static int percentile(IntArrayList values, double percentile) {
-		int[] sorted = values.toIntArray();
-		Arrays.sort(sorted);
-		int index = (int) Math.floor(percentile * (sorted.length - 1));
-		index = Mth.clamp(index, 0, sorted.length - 1);
-		return sorted[index];
+		int[] data = values.toIntArray();
+		if (data.length == 0) {
+			return 0;
+		}
+		int index = (int) Math.floor(percentile * (data.length - 1));
+		index = Mth.clamp(index, 0, data.length - 1);
+		return selectNth(data, index);
+	}
+
+	private static int selectNth(int[] data, int index) {
+		int left = 0;
+		int right = data.length - 1;
+		while (left < right) {
+			int pivotIndex = left + ((right - left) >>> 1);
+			pivotIndex = partition(data, left, right, pivotIndex);
+			if (index == pivotIndex) {
+				return data[index];
+			}
+			if (index < pivotIndex) {
+				right = pivotIndex - 1;
+			} else {
+				left = pivotIndex + 1;
+			}
+		}
+		return data[left];
+	}
+
+	private static int partition(int[] data, int left, int right, int pivotIndex) {
+		int pivotValue = data[pivotIndex];
+		swap(data, pivotIndex, right);
+		int storeIndex = left;
+		for (int i = left; i < right; i++) {
+			if (data[i] < pivotValue) {
+				swap(data, storeIndex, i);
+				storeIndex++;
+			}
+		}
+		swap(data, right, storeIndex);
+		return storeIndex;
+	}
+
+	private static void swap(int[] data, int left, int right) {
+		if (left == right) {
+			return;
+		}
+		int temp = data[left];
+		data[left] = data[right];
+		data[right] = temp;
+	}
+
+	private static final class RegionScratch {
+		private int capacity;
+		private boolean[] baseWaterMask;
+		private boolean[] noDataMask;
+		private int[] surfaceHeights;
+		private int[] componentIds;
+		private ComponentData[] components;
+		private int[] waterSurface;
+		private int[] terrainSurface;
+		private byte[] waterFlags;
+		private boolean[] inlandWaterMask;
+		private boolean[] oceanComponentMask;
+		private boolean[] oceanFloodMask;
+		private boolean[] waterMask;
+		private boolean[] landMask;
+		private int[] waterDistanceCost;
+		private int[] landDistanceCost;
+		private int[] nearestSurface;
+		private boolean[] landSource;
+		private final IntArrayList oceanQueue = new IntArrayList();
+		private final IntArrayList shoreWater = new IntArrayList();
+		private final IntArrayList shoreLand = new IntArrayList();
+		private IntArrayList[] buckets;
+		private boolean[] bucketUsed;
+		private final IntArrayList usedBuckets = new IntArrayList();
+		private int bucketCapacity;
+
+		private void ensureCapacity(int size) {
+			if (size <= this.capacity) {
+				return;
+			}
+			this.capacity = size;
+			this.baseWaterMask = new boolean[size];
+			this.noDataMask = new boolean[size];
+			this.surfaceHeights = new int[size];
+			this.componentIds = new int[size];
+			this.components = new ComponentData[size];
+			this.waterSurface = new int[size];
+			this.terrainSurface = new int[size];
+			this.waterFlags = new byte[size];
+			this.inlandWaterMask = new boolean[size];
+			this.oceanComponentMask = new boolean[size];
+			this.oceanFloodMask = new boolean[size];
+			this.waterMask = new boolean[size];
+			this.landMask = new boolean[size];
+			this.waterDistanceCost = new int[size];
+			this.landDistanceCost = new int[size];
+			this.nearestSurface = new int[size];
+			this.landSource = new boolean[size];
+		}
+
+		private void ensureBucketCapacity(int size) {
+			if (size <= this.bucketCapacity) {
+				return;
+			}
+			this.bucketCapacity = size;
+			this.buckets = new IntArrayList[size];
+			this.bucketUsed = new boolean[size];
+		}
+
+		private void resetLists() {
+			this.oceanQueue.clear();
+			this.shoreWater.clear();
+			this.shoreLand.clear();
+		}
 	}
 
 	private boolean useLegacyWaterBehavior() {

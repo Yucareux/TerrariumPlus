@@ -88,8 +88,8 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 	).apply(instance, EarthChunkGenerator::new));
 
 	private static final double EQUATOR_CIRCUMFERENCE = 40075017.0;
-	private static final TerrariumElevationSource ELEVATION_SOURCE = new TerrariumElevationSource();
-	private static final TerrariumLandCoverSource LAND_COVER_SOURCE = new TerrariumLandCoverSource();
+	private static final TerrariumElevationSource ELEVATION_SOURCE = TerrariumWorldgenSources.elevation();
+	private static final TerrariumLandCoverSource LAND_COVER_SOURCE = TerrariumWorldgenSources.landCover();
 	private static final int COVER_ROLL_RANGE = 200;
 	private static final int SNOW_ICE_CHANCE = 3;
 	private static final int POWDER_SNOW_CHANCE = 30;
@@ -127,7 +127,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 		EarthGeneratorSettings.HeightLimits limits = EarthGeneratorSettings.resolveHeightLimits(settings);
 		this.minY = limits.minY();
 		this.height = limits.height();
-		this.waterResolver = new WaterSurfaceResolver(LAND_COVER_SOURCE, ELEVATION_SOURCE, settings);
+		this.waterResolver = TerrariumWorldgenSources.waterResolver(settings);
 		if (Terrarium.LOGGER.isInfoEnabled()) {
 			Terrarium.LOGGER.info(
 					"EarthChunkGenerator init: scale={}, minAltitude={}, maxAltitude={}, heightOffset={}, limits=[minY={}, height={}, logicalHeight={}], seaLevel={}",
@@ -332,6 +332,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 			@NonNull ChunkAccess chunk
 	) {
 		ChunkPos pos = chunk.getPos();
+		TerrariumWorldgenSources.prefetchForChunk(pos, this.settings);
 		int chunkMinY = chunk.getMinY();
 		int chunkHeight = chunk.getHeight();
 		int chunkMaxY = chunkMinY + chunkHeight;

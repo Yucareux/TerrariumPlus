@@ -30,6 +30,7 @@ public final class TerrariumElevationSource {
 	private static final double DOWNSAMPLE_START_PIXELS = 4.0;
 	private static final int MAX_DOWNSAMPLE_STEP = 256;
 	private static final String ENDPOINT = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
+	private static final int MAX_CACHE_TILES = intProperty("terrariumplus.elevation.cacheTiles", 256);
 
 	private final Path cacheRoot;
 	private final LoadingCache<TileKey, ShortRaster> cache;
@@ -37,7 +38,7 @@ public final class TerrariumElevationSource {
 	public TerrariumElevationSource() {
 		this.cacheRoot = FabricLoader.getInstance().getGameDir().resolve("terrarium/cache/elevation-terrarium");
 		this.cache = CacheBuilder.newBuilder()
-				.maximumSize(64)
+				.maximumSize(MAX_CACHE_TILES)
 				.build(new CacheLoader<>() {
 					@Override
 					public ShortRaster load(TileKey key) throws Exception {
@@ -77,6 +78,34 @@ public final class TerrariumElevationSource {
 			return oceanSample;
 		}
 		return 0.0;
+	}
+
+	public void prefetchTiles(double blockX, double blockZ, double worldScale, int radius) {
+		if (worldScale <= 0.0) {
+			return;
+		}
+		int step = downsampleStep(worldScale, RESOLUTION_METERS);
+		if (step > 1) {
+			blockX = downsampleBlock(blockX, step);
+			blockZ = downsampleBlock(blockZ, step);
+		}
+
+		int zoom = Mth.clamp(selectZoom(worldScale), MIN_ZOOM, MAX_ZOOM);
+		TileKey center = tileKeyForBlock(blockX, blockZ, worldScale, zoom);
+		if (center == null) {
+			return;
+		}
+		int tilesPerAxis = 1 << zoom;
+		int clampedRadius = Math.max(0, radius);
+		int minX = Math.max(0, center.x() - clampedRadius);
+		int maxX = Math.min(tilesPerAxis - 1, center.x() + clampedRadius);
+		int minY = Math.max(0, center.y() - clampedRadius);
+		int maxY = Math.min(tilesPerAxis - 1, center.y() + clampedRadius);
+		for (int tileY = minY; tileY <= maxY; tileY++) {
+			for (int tileX = minX; tileX <= maxX; tileX++) {
+				prefetchTile(new TileKey(zoom, tileX, tileY));
+			}
+		}
 	}
 
 	private double sampleAtZoom(double blockX, double blockZ, double worldScale, int zoom) {
@@ -128,6 +157,51 @@ public final class TerrariumElevationSource {
 		int block = Mth.floor(blockCoord);
 		int snapped = Math.floorDiv(block, step) * step;
 		return snapped + step * 0.5;
+	}
+
+	private static TileKey tileKeyForBlock(double blockX, double blockZ, double worldScale, int zoom) {
+		double metersPerDegree = EQUATOR_CIRCUMFERENCE / 360.0;
+		double blocksPerDegree = metersPerDegree / worldScale;
+		double lon = blockX / blocksPerDegree;
+		double lat = -blockZ / blocksPerDegree;
+		if (lat < MIN_LAT || lat > MAX_LAT || lon < MIN_LON || lon > MAX_LON) {
+			return null;
+		}
+
+		double latRad = Math.toRadians(lat);
+		double n = Math.pow(2.0, zoom);
+		double x = (lon + 180.0) / 360.0 * n;
+		double y = (1.0 - Math.log(Math.tan(latRad) + 1.0 / Math.cos(latRad)) / Math.PI) / 2.0 * n;
+		if (x < 0.0 || y < 0.0 || x >= n || y >= n) {
+			return null;
+		}
+
+		int tileX = Mth.floor(x);
+		int tileY = Mth.floor(y);
+		return new TileKey(zoom, tileX, tileY);
+	}
+
+	private void prefetchTile(TileKey key) {
+		if (this.cache.getIfPresent(key) != null) {
+			return;
+		}
+		try {
+			this.cache.get(key);
+		} catch (Exception e) {
+			Terrarium.LOGGER.debug("Failed to prefetch elevation tile {}", key, e);
+		}
+	}
+
+	private static int intProperty(String key, int defaultValue) {
+		String value = System.getProperty(key);
+		if (value == null) {
+			return defaultValue;
+		}
+		try {
+			return Math.max(1, Integer.parseInt(value));
+		} catch (NumberFormatException ignored) {
+			return defaultValue;
+		}
 	}
 
 	private ShortRaster getTile(TileKey key) {
