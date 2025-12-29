@@ -63,7 +63,7 @@ public record EarthGeneratorSettings(
 	public static final int MAX_WORLD_HEIGHT = 4064;
 	public static final int MAX_WORLD_Y = MIN_WORLD_Y + MAX_WORLD_HEIGHT - 1;
 
-	private static final int ALTITUDE_TOLERANCE = 100;
+	private static final int ALTITUDE_TOLERANCE = 50;
 	private static final int HEIGHT_ALIGNMENT = 16;
 	private static final double EVEREST_ELEVATION_METERS = 8848.0;
 	private static final double MARIANA_TRENCH_METERS = -11034.0;
