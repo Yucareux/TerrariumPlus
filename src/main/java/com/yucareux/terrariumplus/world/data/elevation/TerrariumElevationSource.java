@@ -20,7 +20,7 @@ public final class TerrariumElevationSource {
 	private static final double EQUATOR_CIRCUMFERENCE = 40075017.0;
 	private static final int TILE_SIZE = 256;
 	private static final int MIN_ZOOM = 0;
-	private static final int MAX_ZOOM = 10;
+	private static final int LAND_MAX_ZOOM = 15;
 	private static final int OCEAN_MAX_ZOOM = 10;
 	private static final double MIN_LAT = -85.05112878;
 	private static final double MAX_LAT = 85.05112878;
@@ -62,7 +62,7 @@ public final class TerrariumElevationSource {
 			blockZ = downsampleBlock(blockZ, step);
 		}
 
-		int zoom = Mth.clamp(selectZoom(worldScale), MIN_ZOOM, MAX_ZOOM);
+		int zoom = Mth.clamp(selectZoom(worldScale), MIN_ZOOM, LAND_MAX_ZOOM);
 		double sample = sampleAtZoom(blockX, blockZ, worldScale, zoom);
 		if (!Double.isNaN(sample)) {
 			if (sample <= 0.0 && highResOcean) {
@@ -90,7 +90,7 @@ public final class TerrariumElevationSource {
 			blockZ = downsampleBlock(blockZ, step);
 		}
 
-		int zoom = Mth.clamp(selectZoom(worldScale), MIN_ZOOM, MAX_ZOOM);
+		int zoom = Mth.clamp(selectZoom(worldScale), MIN_ZOOM, LAND_MAX_ZOOM);
 		TileKey center = tileKeyForBlock(blockX, blockZ, worldScale, zoom);
 		if (center == null) {
 			return;
