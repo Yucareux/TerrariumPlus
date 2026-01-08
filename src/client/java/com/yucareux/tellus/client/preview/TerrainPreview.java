@@ -7,6 +7,7 @@ import com.yucareux.tellus.mixin.client.GuiGraphicsAccessor;
 import com.yucareux.tellus.world.data.cover.TellusLandCoverSource;
 import com.yucareux.tellus.world.data.elevation.TellusElevationSource;
 import com.yucareux.tellus.world.data.koppen.TellusKoppenSource;
+import com.yucareux.tellus.world.data.mask.TellusLandMaskSource;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -93,6 +94,7 @@ public final class TerrainPreview implements AutoCloseable {
 	private final TellusElevationSource elevationSource = new TellusElevationSource();
 	private final TellusLandCoverSource landCoverSource = new TellusLandCoverSource();
 	private final TellusKoppenSource koppenSource = new TellusKoppenSource();
+	private final TellusLandMaskSource landMaskSource = new TellusLandMaskSource();
 	private final ExecutorService executor;
 	private final AtomicInteger requestId = new AtomicInteger();
 
@@ -183,11 +185,12 @@ public final class TerrainPreview implements AutoCloseable {
 			for (int x = 0; x < size; x++) {
 				double blockX = centerX - radius + x * step;
 				int idx = x + z * size;
+				boolean oceanZoom = useOceanZoom(blockX, blockZ, worldScale);
 				double elevation = this.elevationSource.sampleElevationMeters(
 						blockX,
 						blockZ,
 						worldScale,
-						true
+						oceanZoom
 				);
 				elevations[idx] = elevation;
 				blockHeights[idx] = applyHeightScale(elevation, settings);
@@ -353,6 +356,18 @@ public final class TerrainPreview implements AutoCloseable {
 			return lerpColor(MID_SEA_COLOR, DEEP_SEA_COLOR, (depthBlocks - 12.0) / 68.0);
 		}
 		return DEEP_SEA_COLOR;
+	}
+
+	private boolean useOceanZoom(double blockX, double blockZ, double worldScale) {
+		TellusLandMaskSource.LandMaskSample landSample = this.landMaskSource.sampleLandMask(blockX, blockZ, worldScale);
+		if (!landSample.known()) {
+			return true;
+		}
+		if (landSample.land()) {
+			return false;
+		}
+		int coverClass = this.landCoverSource.sampleCoverClass(blockX, blockZ, worldScale);
+		return coverClass == ESA_NO_DATA;
 	}
 
 	private static int applyClimateTint(int base, byte climateGroup, int coverClass) {

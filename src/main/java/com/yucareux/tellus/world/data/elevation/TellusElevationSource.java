@@ -42,7 +42,7 @@ public final class TellusElevationSource {
 				.maximumSize(MAX_CACHE_TILES)
 				.build(new CacheLoader<@NonNull TileKey, ShortRaster>() {
 					@Override
-					public ShortRaster load(TileKey key) throws Exception {
+					public ShortRaster load(@NonNull TileKey key) throws Exception {
 						return TellusElevationSource.this.loadTile(key);
 					}
 				});

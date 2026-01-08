@@ -5,7 +5,6 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.yucareux.tellus.world.data.source.Geocoder.Suggestion;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;

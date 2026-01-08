@@ -104,9 +104,6 @@ public final class TellusLandCoverSource {
 		double blocksPerDegree = metersPerDegree / worldScale;
 		double lon = blockX / blocksPerDegree;
 		double lat = -blockZ / blocksPerDegree;
-		if (SMOOTH_RADIUS_PIXELS <= 0) {
-			return sampleCoverClassAtLonLat(lon, lat);
-		}
 		return sampleSmoothedCoverClassAtLonLat(lon, lat, SMOOTH_RADIUS_PIXELS);
 	}
 
@@ -241,7 +238,7 @@ public final class TellusLandCoverSource {
 		return new TileKey(tileLat, tileLon);
 	}
 
-	private void prefetchTile(TileKey key) {
+	private void prefetchTile(@org.jspecify.annotations.NonNull TileKey key) {
 		if (this.cache.getIfPresent(key) != null) {
 			return;
 		}

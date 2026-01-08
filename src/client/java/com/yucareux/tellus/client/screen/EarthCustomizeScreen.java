@@ -6,6 +6,7 @@ import com.yucareux.tellus.client.widget.CustomizationList;
 import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import com.mojang.serialization.Lifecycle;
+import com.mojang.blaze3d.platform.InputConstants;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -16,6 +17,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.DoubleFunction;
 import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.AbstractWidget;
@@ -44,6 +46,7 @@ import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.dimension.LevelStem;
 import net.minecraft.world.level.levelgen.WorldDimensions;
+import org.lwjgl.glfw.GLFW;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
@@ -89,7 +92,6 @@ public class EarthCustomizeScreen extends Screen {
 	private long previewDirtyAt = -1L;
 	private double spawnLatitude = EarthGeneratorSettings.DEFAULT_SPAWN_LATITUDE;
 	private double spawnLongitude = EarthGeneratorSettings.DEFAULT_SPAWN_LONGITUDE;
-	private boolean cinematicMode;
 	private @Nullable CategoryDefinition activeCategory;
 
 	public EarthCustomizeScreen(CreateWorldScreen parent, WorldCreationContext worldCreationContext) {
@@ -135,14 +137,6 @@ public class EarthCustomizeScreen extends Screen {
 	}
 
 	private void onSettingsChanged() {
-		boolean cinematic = this.findToggleValue("cinematic_mode", false);
-		if (cinematic != this.cinematicMode) {
-			this.cinematicMode = cinematic;
-			this.applyCinematicMode(cinematic);
-			if (this.activeCategory != null) {
-				this.showCategory(this.activeCategory);
-			}
-		}
 		this.previewDirtyAt = System.currentTimeMillis();
 	}
 
@@ -370,7 +364,6 @@ public class EarthCustomizeScreen extends Screen {
 		double oceanicScale = this.findSliderValue("oceanic_height_scale", EarthGeneratorSettings.DEFAULT.oceanicHeightScale());
 		int heightOffset = (int) Math.round(this.findSliderValue("height_offset", EarthGeneratorSettings.DEFAULT.heightOffset()));
 		int seaLevel = this.resolveSeaLevelSetting("sea_level", AUTO_SEA_LEVEL);
-		boolean cinematicMode = this.findToggleValue("cinematic_mode", false);
 		int maxAltitude = this.resolveAltitudeSetting("max_altitude", AUTO_MAX_ALTITUDE);
 		int minAltitude = this.resolveAltitudeSetting("min_altitude", AUTO_MIN_ALTITUDE);
 		int riverLakeShorelineBlend = (int) Math.round(
@@ -383,19 +376,15 @@ public class EarthCustomizeScreen extends Screen {
 				"shoreline_blend_cliff_limit",
 				EarthGeneratorSettings.DEFAULT.shorelineBlendCliffLimit()
 		);
-		if (cinematicMode) {
-			maxAltitude = EarthGeneratorSettings.AUTO_ALTITUDE;
-			minAltitude = EarthGeneratorSettings.AUTO_ALTITUDE;
-		}
 		boolean caveCarvers = false;
 		boolean largeCaves = false;
 		boolean canyonCarvers = false;
 		boolean aquifers = false;
 		boolean dripstone = false;
 		boolean deepDark = false;
-		boolean oreDistribution = cinematicMode ? false : this.findToggleValue("ore_distribution", false);
+		boolean oreDistribution = this.findToggleValue("ore_distribution", false);
 		boolean geodes = false;
-		boolean lavaPools = cinematicMode ? false : this.findToggleValue("lava_pools", false);
+		boolean lavaPools = this.findToggleValue("lava_pools", false);
 		boolean addStrongholds = false;
 		boolean addVillages = this.findToggleValue("add_villages", true);
 		boolean addMineshafts = false;
@@ -434,7 +423,6 @@ public class EarthCustomizeScreen extends Screen {
 				riverLakeShorelineBlend,
 				oceanShorelineBlend,
 				shorelineBlendCliffLimit,
-				cinematicMode,
 				caveCarvers,
 				largeCaves,
 				canyonCarvers,
@@ -708,27 +696,6 @@ public class EarthCustomizeScreen extends Screen {
 			return EarthGeneratorSettings.AUTO_SEA_LEVEL;
 		}
 		return (int) Math.round(value);
-	}
-
-	private void applyCinematicMode(boolean cinematic) {
-		for (CategoryDefinition category : this.categories) {
-			for (SettingDefinition setting : category.getSettings()) {
-				if (setting instanceof SliderDefinition slider) {
-					if ("max_altitude".equals(slider.key)) {
-						slider.locked = cinematic;
-						if (cinematic) {
-							slider.value = AUTO_MAX_ALTITUDE;
-						}
-					}
-					if ("min_altitude".equals(slider.key)) {
-						slider.locked = cinematic;
-						if (cinematic) {
-							slider.value = AUTO_MIN_ALTITUDE;
-						}
-					}
-				}
-			}
-		}
 	}
 
 	private static @NonNull RegistryUpdate updateDimensionTypeRegistry(
@@ -1094,20 +1061,25 @@ public class EarthCustomizeScreen extends Screen {
 		}
 
 		private double snap(double value, double step) {
-			if (step <= 0.0) {
+			double effectiveStep = step;
+			if ("world_scale".equals(this.definition.key) && isShiftDown()) {
+				effectiveStep = Math.max(1.0, step / 5.0);
+			}
+			if (effectiveStep <= 0.0) {
 				return Mth.clamp(value, this.definition.min, this.definition.max);
 			}
 			if ("world_scale".equals(this.definition.key)) {
 				double firstStep = this.definition.min;
-				double cutoff = (firstStep + step) * 0.5;
+				double cutoff = (firstStep + effectiveStep) * 0.5;
 				if (value <= cutoff) {
 					return firstStep;
 				}
-				double snapped = Math.round(value / step) * step;
-				double adjusted = Math.max(step, snapped);
+				double snapped = Math.round(value / effectiveStep) * effectiveStep;
+				double adjusted = Math.max(effectiveStep, snapped);
 				return Mth.clamp(adjusted, this.definition.min, this.definition.max);
 			}
-			double snapped = this.definition.min + Math.round((value - this.definition.min) / step) * step;
+			double snapped = this.definition.min
+					+ Math.round((value - this.definition.min) / effectiveStep) * effectiveStep;
 			return Mth.clamp(snapped, this.definition.min, this.definition.max);
 		}
 
@@ -1121,6 +1093,11 @@ public class EarthCustomizeScreen extends Screen {
 			double scaled = this.definition.scale.apply(position);
 			return this.definition.min + (this.definition.max - this.definition.min) * Mth.clamp(scaled, 0.0, 1.0);
 		}
+	}
+
+	private static boolean isShiftDown() {
+		return InputConstants.isKeyDown(Minecraft.getInstance().getWindow(), GLFW.GLFW_KEY_LEFT_SHIFT)
+				|| InputConstants.isKeyDown(Minecraft.getInstance().getWindow(), GLFW.GLFW_KEY_RIGHT_SHIFT);
 	}
 
 	private interface SliderScale {

@@ -3,6 +3,7 @@ package com.yucareux.tellus.worldgen;
 import com.yucareux.tellus.world.data.cover.TellusLandCoverSource;
 import com.yucareux.tellus.world.data.elevation.TellusElevationSource;
 import com.yucareux.tellus.world.data.koppen.TellusKoppenSource;
+import com.yucareux.tellus.world.data.mask.TellusLandMaskSource;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -20,12 +21,15 @@ final class TellusWorldgenSources {
 	private static final TellusLandCoverSource LAND_COVER = new TellusLandCoverSource();
 	private static final TellusElevationSource ELEVATION = new TellusElevationSource();
 	private static final TellusKoppenSource KOPPEN = new TellusKoppenSource();
+	private static final TellusLandMaskSource LAND_MASK = new TellusLandMaskSource();
 	private static final boolean PREFETCH_ENABLED =
 			Boolean.parseBoolean(System.getProperty("tellus.prefetch.enabled", "true"));
 	private static final int LAND_COVER_PREFETCH_RADIUS =
 			intProperty("tellus.prefetch.landcover.radius", 1);
 	private static final int ELEVATION_PREFETCH_RADIUS =
 			intProperty("tellus.prefetch.elevation.radius", 1);
+	private static final int LAND_MASK_PREFETCH_RADIUS =
+			intProperty("tellus.prefetch.landmask.radius", 1);
 	private static final boolean WATER_PREFETCH_ENABLED =
 			Boolean.parseBoolean(System.getProperty("tellus.prefetch.water.enabled", "true"));
 	private static final int WATER_PREFETCH_RADIUS =
@@ -49,11 +53,15 @@ final class TellusWorldgenSources {
 		return KOPPEN;
 	}
 
+	static TellusLandMaskSource landMask() {
+		return LAND_MASK;
+	}
+
 	static @NonNull WaterSurfaceResolver waterResolver(EarthGeneratorSettings settings) {
 		Objects.requireNonNull(settings, "settings");
 		WaterSurfaceResolver resolver = WATER_RESOLVERS.computeIfAbsent(
 				settings,
-				value -> new WaterSurfaceResolver(LAND_COVER, ELEVATION, value)
+				value -> new WaterSurfaceResolver(LAND_COVER, LAND_MASK, ELEVATION, value)
 		);
 		return Objects.requireNonNull(resolver, "waterResolver");
 	}
@@ -70,6 +78,9 @@ final class TellusWorldgenSources {
 		}
 		if (ELEVATION_PREFETCH_RADIUS > 0) {
 			submitPrefetch(() -> ELEVATION.prefetchTiles(centerX, centerZ, worldScale, ELEVATION_PREFETCH_RADIUS));
+		}
+		if (LAND_MASK_PREFETCH_RADIUS > 0) {
+			submitPrefetch(() -> LAND_MASK.prefetchTiles(centerX, centerZ, worldScale, LAND_MASK_PREFETCH_RADIUS));
 		}
 		if (WATER_PREFETCH_ENABLED && WATER_PREFETCH_RADIUS > 0) {
 			submitPrefetch(() -> waterResolver(settings).prefetchRegionsForChunk(pos.x, pos.z, WATER_PREFETCH_RADIUS));

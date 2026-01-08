@@ -28,7 +28,6 @@ public record EarthGeneratorSettings(
 		int riverLakeShorelineBlend,
 		int oceanShorelineBlend,
 		boolean shorelineBlendCliffLimit,
-		boolean cinematicMode,
 		boolean caveCarvers,
 		boolean largeCaves,
 		boolean canyonCarvers,
@@ -95,7 +94,6 @@ public record EarthGeneratorSettings(
 			false,
 			false,
 			false,
-			false,
 			true,
 			false,
 			true,
@@ -117,7 +115,6 @@ public record EarthGeneratorSettings(
 	);
 
 	private static final MapCodec<BaseToggles> BASE_TOGGLES_CODEC = RecordCodecBuilder.mapCodec(instance -> instance.group(
-			Codec.BOOL.fieldOf("cinematic_mode").orElse(DEFAULT.cinematicMode()).forGetter(BaseToggles::cinematicMode),
 			Codec.BOOL.fieldOf("cave_carvers").orElse(DEFAULT.caveCarvers()).forGetter(BaseToggles::caveCarvers),
 			Codec.BOOL.fieldOf("large_caves").orElse(DEFAULT.largeCaves()).forGetter(BaseToggles::largeCaves),
 			Codec.BOOL.fieldOf("canyon_carvers").orElse(DEFAULT.canyonCarvers()).forGetter(BaseToggles::canyonCarvers),
@@ -125,8 +122,7 @@ public record EarthGeneratorSettings(
 			Codec.BOOL.fieldOf("dripstone").orElse(DEFAULT.dripstone()).forGetter(BaseToggles::dripstone),
 			Codec.BOOL.fieldOf("deep_dark").orElse(DEFAULT.deepDark()).forGetter(BaseToggles::deepDark),
 			Codec.BOOL.fieldOf("ore_distribution").orElse(DEFAULT.oreDistribution()).forGetter(BaseToggles::oreDistribution)
-	).apply(instance, (cinematicMode, caveCarvers, largeCaves, canyonCarvers, aquifers, dripstone, deepDark, oreDistribution) -> new BaseToggles(
-			Objects.requireNonNull(cinematicMode, "cinematicMode").booleanValue(),
+	).apply(instance, (caveCarvers, largeCaves, canyonCarvers, aquifers, dripstone, deepDark, oreDistribution) -> new BaseToggles(
 			Objects.requireNonNull(caveCarvers, "caveCarvers").booleanValue(),
 			Objects.requireNonNull(largeCaves, "largeCaves").booleanValue(),
 			Objects.requireNonNull(canyonCarvers, "canyonCarvers").booleanValue(),
@@ -154,7 +150,6 @@ public record EarthGeneratorSettings(
 			Codec.BOOL.fieldOf("shoreline_blend_cliff_limit").orElse(DEFAULT.shorelineBlendCliffLimit())
 					.forGetter(SettingsBase::shorelineBlendCliffLimit),
 			BASE_TOGGLES_CODEC.forGetter(settings -> new BaseToggles(
-					settings.cinematicMode(),
 					settings.caveCarvers(),
 					settings.largeCaves(),
 					settings.canyonCarvers(),
@@ -176,7 +171,6 @@ public record EarthGeneratorSettings(
 			riverLakeShorelineBlend,
 			oceanShorelineBlend,
 			shorelineBlendCliffLimit,
-			toggles.cinematicMode(),
 			toggles.caveCarvers(),
 			toggles.largeCaves(),
 			toggles.canyonCarvers(),
@@ -356,7 +350,6 @@ public record EarthGeneratorSettings(
 			Integer riverLakeShorelineBlend,
 			Integer oceanShorelineBlend,
 			Boolean shorelineBlendCliffLimit,
-			Boolean cinematicMode,
 			Boolean caveCarvers,
 			Boolean largeCaves,
 			Boolean canyonCarvers,
@@ -380,7 +373,6 @@ public record EarthGeneratorSettings(
 				Objects.requireNonNull(riverLakeShorelineBlend, "riverLakeShorelineBlend").intValue(),
 				Objects.requireNonNull(oceanShorelineBlend, "oceanShorelineBlend").intValue(),
 				Objects.requireNonNull(shorelineBlendCliffLimit, "shorelineBlendCliffLimit").booleanValue(),
-				Objects.requireNonNull(cinematicMode, "cinematicMode").booleanValue(),
 				Objects.requireNonNull(caveCarvers, "caveCarvers").booleanValue(),
 				Objects.requireNonNull(largeCaves, "largeCaves").booleanValue(),
 				Objects.requireNonNull(canyonCarvers, "canyonCarvers").booleanValue(),
@@ -395,7 +387,6 @@ public record EarthGeneratorSettings(
 	}
 
 	private record BaseToggles(
-			boolean cinematicMode,
 			boolean caveCarvers,
 			boolean largeCaves,
 			boolean canyonCarvers,
@@ -419,7 +410,6 @@ public record EarthGeneratorSettings(
 			int riverLakeShorelineBlend,
 			int oceanShorelineBlend,
 			boolean shorelineBlendCliffLimit,
-			boolean cinematicMode,
 			boolean caveCarvers,
 			boolean largeCaves,
 			boolean canyonCarvers,
@@ -445,7 +435,6 @@ public record EarthGeneratorSettings(
 					settings.riverLakeShorelineBlend(),
 					settings.oceanShorelineBlend(),
 					settings.shorelineBlendCliffLimit(),
-					settings.cinematicMode(),
 					settings.caveCarvers(),
 					settings.largeCaves(),
 					settings.canyonCarvers(),
@@ -473,7 +462,6 @@ public record EarthGeneratorSettings(
 					this.riverLakeShorelineBlend,
 					this.oceanShorelineBlend,
 					this.shorelineBlendCliffLimit,
-					this.cinematicMode,
 					this.caveCarvers,
 					this.largeCaves,
 					this.canyonCarvers,
@@ -501,7 +489,6 @@ public record EarthGeneratorSettings(
 					this.riverLakeShorelineBlend,
 					this.oceanShorelineBlend,
 					this.shorelineBlendCliffLimit,
-					this.cinematicMode,
 					this.caveCarvers,
 					this.largeCaves,
 					this.canyonCarvers,
@@ -529,7 +516,6 @@ public record EarthGeneratorSettings(
 					this.riverLakeShorelineBlend,
 					this.oceanShorelineBlend,
 					this.shorelineBlendCliffLimit,
-					this.cinematicMode,
 					this.caveCarvers,
 					this.largeCaves,
 					this.canyonCarvers,
@@ -557,7 +543,6 @@ public record EarthGeneratorSettings(
 					this.riverLakeShorelineBlend,
 					this.oceanShorelineBlend,
 					this.shorelineBlendCliffLimit,
-					this.cinematicMode,
 					this.caveCarvers,
 					this.largeCaves,
 					this.canyonCarvers,
@@ -585,7 +570,6 @@ public record EarthGeneratorSettings(
 					this.riverLakeShorelineBlend,
 					this.oceanShorelineBlend,
 					this.shorelineBlendCliffLimit,
-					this.cinematicMode,
 					this.caveCarvers,
 					this.largeCaves,
 					this.canyonCarvers,
@@ -703,7 +687,6 @@ public record EarthGeneratorSettings(
 				this.riverLakeShorelineBlend,
 				this.oceanShorelineBlend,
 				this.shorelineBlendCliffLimit,
-				this.cinematicMode,
 				this.caveCarvers,
 				this.largeCaves,
 				this.canyonCarvers,
@@ -753,7 +736,6 @@ public record EarthGeneratorSettings(
 				this.riverLakeShorelineBlend,
 				this.oceanShorelineBlend,
 				this.shorelineBlendCliffLimit,
-				this.cinematicMode,
 				this.caveCarvers,
 				this.largeCaves,
 				this.canyonCarvers,
@@ -820,8 +802,8 @@ public record EarthGeneratorSettings(
 	public static HeightLimits resolveHeightLimits(EarthGeneratorSettings settings) {
 		int autoMin = computeAutoMinAltitude(settings);
 		int autoMax = computeAutoMaxAltitude(settings);
-		boolean autoMinEnabled = settings.minAltitude() == AUTO_ALTITUDE || settings.cinematicMode();
-		boolean autoMaxEnabled = settings.maxAltitude() == AUTO_ALTITUDE || settings.cinematicMode();
+		boolean autoMinEnabled = settings.minAltitude() == AUTO_ALTITUDE;
+		boolean autoMaxEnabled = settings.maxAltitude() == AUTO_ALTITUDE;
 
 		if ((autoMinEnabled && autoMin < MIN_WORLD_Y) || (autoMaxEnabled && autoMax > MAX_WORLD_Y)) {
 			return HeightLimits.maxRange();

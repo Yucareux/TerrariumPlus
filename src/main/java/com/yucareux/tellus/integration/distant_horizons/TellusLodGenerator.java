@@ -49,11 +49,22 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 	private static final int WATER_VEG_SALT = 0x3C6EF35F;
 	private static final int WATER_VEG_MIN_DEPTH = 1;
 	private static final int WATER_VEG_MAX_HEIGHT = 4;
+	private static final int WATER_VEG_MAX_DETAIL = 4;
+	private static final int ESA_NO_DATA = 0;
+	private static final int ESA_TREE_COVER = 10;
+	private static final int ESA_WATER = 80;
+	private static final int ESA_MANGROVES = 95;
 	private static final int BADLANDS_LOD_BAND_DEPTH = 16;
 	private static final int BADLANDS_LOD_BAND_HEIGHT = 3;
 	private static final int BADLANDS_LOD_SLOPE_DIFF = 3;
 	private static final int LOD_SLOPE_STEP = 4;
-	private static final int LOD_WATER_RESOLVER_MAX_DETAIL = 6;
+	private static final int LOD_WATER_RESOLVER_MAX_DETAIL = 5;
+	private static final int LOD_PREFETCH_GRID_MIN = 2;
+	private static final int LOD_PREFETCH_GRID_MAX = 5;
+	private static final int LOD_PREFETCH_GRID_DIVISOR = 8;
+	private static final int LOD_DETAILED_WATER_STRIDE_DETAIL = 5;
+	private static final int LOD_COVER_DOWNSAMPLE_START_DETAIL = 7;
+	private static final int LOD_DOWNSAMPLE_MAX_STRIDE = 4;
 	private final IDhApiLevelWrapper levelWrapper;
 	private final EarthChunkGenerator generator;
 	private final EarthBiomeSource biomeSource;
@@ -122,6 +133,10 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		final WrapperCache wrappers = wrapperCache.get();
 		final IDhApiBlockStateWrapper waterBlock = wrappers.getBlockState(Blocks.WATER.defaultBlockState());
 		final List<DhApiTerrainDataPoint> columnDataPoints = new ArrayList<>();
+		final Map<SurfaceWrapperKey, SurfaceWrapperPair> surfaceWrapperCache = new HashMap<>();
+		final int coverStride = coverSampleStride(detailLevel, lodSizePoints);
+		final int detailedWaterStride = detailedWaterStride(detailLevel, lodSizePoints);
+		final boolean allowWaterVegetation = detailLevel <= WATER_VEG_MAX_DETAIL;
 		final int area = lodSizePoints * lodSizePoints;
 		final int[] surfaceYs = new int[area];
 		final int[] vegetationSurfaceYs = new int[area];
@@ -130,35 +145,50 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		final int[] coverClasses = new int[area];
 		final int[] fastSurfaceYs = new int[area];
 		final boolean[] fastOceanFlags = new boolean[area];
+		final IDhApiBiomeWrapper[] biomeWrappers = new IDhApiBiomeWrapper[area];
 		@SuppressWarnings("unchecked")
 		final Holder<Biome>[] biomeHolders = (Holder<Biome>[]) new Holder[area];
 		boolean hasWaterInTile = false;
 
-		for (int localZ = 0; localZ < lodSizePoints; localZ++) {
-			final int worldZ = baseZ + localZ * cellSize + cellOffset;
-			for (int localX = 0; localX < lodSizePoints; localX++) {
-				final int worldX = baseX + localX * cellSize + cellOffset;
-				final int index = localZ * lodSizePoints + localX;
-				final int coverClass = generator.sampleCoverClass(worldX, worldZ);
-				final WaterSurfaceResolver.WaterColumnData fastColumn =
-						generator.resolveLodWaterColumn(worldX, worldZ, coverClass);
-				final int surfaceY = Mth.clamp(fastColumn.terrainSurface(), minY, maxY - 1);
-				final int waterSurface = Mth.clamp(fastColumn.waterSurface(), minY, maxY - 1);
-				final boolean underwater = fastColumn.hasWater() && waterSurface > surfaceY;
-				final int vegetationSurface = surfaceY;
-			if (baseDetailedWater) {
-				if (fastColumn.hasWater()) {
-					hasWaterInTile = true;
+		for (int baseLocalZ = 0; baseLocalZ < lodSizePoints; baseLocalZ += coverStride) {
+			for (int baseLocalX = 0; baseLocalX < lodSizePoints; baseLocalX += coverStride) {
+				final int sampleWorldX = baseX + baseLocalX * cellSize + cellOffset;
+				final int sampleWorldZ = baseZ + baseLocalZ * cellSize + cellOffset;
+				final int coverClass = generator.sampleCoverClass(sampleWorldX, sampleWorldZ);
+				for (int dz = 0; dz < coverStride; dz++) {
+					final int localZ = baseLocalZ + dz;
+					if (localZ >= lodSizePoints) {
+						continue;
+					}
+					final int worldZ = baseZ + localZ * cellSize + cellOffset;
+					for (int dx = 0; dx < coverStride; dx++) {
+						final int localX = baseLocalX + dx;
+						if (localX >= lodSizePoints) {
+							continue;
+						}
+						final int worldX = baseX + localX * cellSize + cellOffset;
+						final int index = localZ * lodSizePoints + localX;
+						final WaterSurfaceResolver.WaterColumnData fastColumn =
+								generator.resolveLodWaterColumn(worldX, worldZ, coverClass);
+						final int surfaceY = Mth.clamp(fastColumn.terrainSurface(), minY, maxY - 1);
+						final int waterSurface = Mth.clamp(fastColumn.waterSurface(), minY, maxY - 1);
+						final boolean underwater = fastColumn.hasWater() && waterSurface > surfaceY;
+						final int vegetationSurface = surfaceY;
+						if (baseDetailedWater && fastColumn.hasWater()) {
+							hasWaterInTile = true;
+						}
+						fastSurfaceYs[index] = surfaceY;
+						fastOceanFlags[index] = fastColumn.isOcean();
+						surfaceYs[index] = surfaceY;
+						vegetationSurfaceYs[index] = Mth.clamp(vegetationSurface, minY, maxY - 1);
+						waterSurfaces[index] = waterSurface;
+						underwaterFlags[index] = underwater;
+						coverClasses[index] = coverClass;
+						Holder<Biome> biomeHolder = biomeSource.getBiomeAtBlock(worldX, worldZ);
+						biomeHolders[index] = biomeHolder;
+						biomeWrappers[index] = wrappers.getBiome(biomeHolder);
+					}
 				}
-			}
-			fastSurfaceYs[index] = surfaceY;
-			fastOceanFlags[index] = fastColumn.isOcean();
-				surfaceYs[index] = surfaceY;
-				vegetationSurfaceYs[index] = Mth.clamp(vegetationSurface, minY, maxY - 1);
-				waterSurfaces[index] = waterSurface;
-				underwaterFlags[index] = underwater;
-				coverClasses[index] = coverClass;
-				biomeHolders[index] = biomeSource.getBiomeAtBlock(worldX, worldZ);
 			}
 		}
 
@@ -168,23 +198,87 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		}
 
 		if (useDetailedWater) {
-			for (int localZ = 0; localZ < lodSizePoints; localZ++) {
-				final int worldZ = baseZ + localZ * cellSize + cellOffset;
-				for (int localX = 0; localX < lodSizePoints; localX++) {
-					final int worldX = baseX + localX * cellSize + cellOffset;
-					final int index = localZ * lodSizePoints + localX;
-					final int coverClass = coverClasses[index];
-					final WaterSurfaceResolver.WaterColumnData detailedColumn =
-							generator.resolveLodWaterColumn(worldX, worldZ, coverClass, true);
-					final int surfaceY = Mth.clamp(detailedColumn.terrainSurface(), minY, maxY - 1);
-					final int waterSurface = Mth.clamp(detailedColumn.waterSurface(), minY, maxY - 1);
-					final boolean underwater = detailedColumn.hasWater() && waterSurface > surfaceY;
-					final boolean isOcean = detailedColumn.isOcean() || fastOceanFlags[index];
-					final int vegetationSurface = isOcean ? fastSurfaceYs[index] : surfaceY;
-					surfaceYs[index] = surfaceY;
-					vegetationSurfaceYs[index] = Mth.clamp(vegetationSurface, minY, maxY - 1);
-					waterSurfaces[index] = waterSurface;
-					underwaterFlags[index] = underwater;
+			if (detailedWaterStride <= 1) {
+				for (int localZ = 0; localZ < lodSizePoints; localZ++) {
+					final int worldZ = baseZ + localZ * cellSize + cellOffset;
+					for (int localX = 0; localX < lodSizePoints; localX++) {
+						final int worldX = baseX + localX * cellSize + cellOffset;
+						final int index = localZ * lodSizePoints + localX;
+						final int coverClass = coverClasses[index];
+						if (!isWaterCoverClass(coverClass)) {
+							continue;
+						}
+						final WaterSurfaceResolver.WaterColumnData detailedColumn =
+								generator.resolveLodWaterColumn(worldX, worldZ, coverClass, true);
+						final int surfaceY = Mth.clamp(detailedColumn.terrainSurface(), minY, maxY - 1);
+						final int waterSurface = Mth.clamp(detailedColumn.waterSurface(), minY, maxY - 1);
+						final boolean underwater = detailedColumn.hasWater() && waterSurface > surfaceY;
+						final boolean isOcean = detailedColumn.isOcean() || fastOceanFlags[index];
+						final int vegetationSurface = isOcean ? fastSurfaceYs[index] : surfaceY;
+						surfaceYs[index] = surfaceY;
+						vegetationSurfaceYs[index] = Mth.clamp(vegetationSurface, minY, maxY - 1);
+						waterSurfaces[index] = waterSurface;
+						underwaterFlags[index] = underwater;
+					}
+				}
+			} else {
+				for (int baseLocalZ = 0; baseLocalZ < lodSizePoints; baseLocalZ += detailedWaterStride) {
+					for (int baseLocalX = 0; baseLocalX < lodSizePoints; baseLocalX += detailedWaterStride) {
+						int sampleLocalX = -1;
+						int sampleLocalZ = -1;
+						for (int dz = 0; dz < detailedWaterStride && sampleLocalX < 0; dz++) {
+							final int localZ = baseLocalZ + dz;
+							if (localZ >= lodSizePoints) {
+								continue;
+							}
+							for (int dx = 0; dx < detailedWaterStride; dx++) {
+								final int localX = baseLocalX + dx;
+								if (localX >= lodSizePoints) {
+									continue;
+								}
+								final int index = localZ * lodSizePoints + localX;
+								if (isWaterCoverClass(coverClasses[index])) {
+									sampleLocalX = localX;
+									sampleLocalZ = localZ;
+									break;
+								}
+							}
+						}
+						if (sampleLocalX < 0) {
+							continue;
+						}
+						final int sampleWorldX = baseX + sampleLocalX * cellSize + cellOffset;
+						final int sampleWorldZ = baseZ + sampleLocalZ * cellSize + cellOffset;
+						final int sampleIndex = sampleLocalZ * lodSizePoints + sampleLocalX;
+						final int sampleCover = coverClasses[sampleIndex];
+						final WaterSurfaceResolver.WaterColumnData detailedColumn =
+								generator.resolveLodWaterColumn(sampleWorldX, sampleWorldZ, sampleCover, true);
+						final int surfaceY = Mth.clamp(detailedColumn.terrainSurface(), minY, maxY - 1);
+						final int waterSurface = Mth.clamp(detailedColumn.waterSurface(), minY, maxY - 1);
+						final boolean underwater = detailedColumn.hasWater() && waterSurface > surfaceY;
+						for (int dz = 0; dz < detailedWaterStride; dz++) {
+							final int localZ = baseLocalZ + dz;
+							if (localZ >= lodSizePoints) {
+								continue;
+							}
+							for (int dx = 0; dx < detailedWaterStride; dx++) {
+								final int localX = baseLocalX + dx;
+								if (localX >= lodSizePoints) {
+									continue;
+								}
+								final int index = localZ * lodSizePoints + localX;
+								if (!isWaterCoverClass(coverClasses[index])) {
+									continue;
+								}
+								final boolean isOcean = detailedColumn.isOcean() || fastOceanFlags[index];
+								final int vegetationSurface = isOcean ? fastSurfaceYs[index] : surfaceY;
+								surfaceYs[index] = surfaceY;
+								vegetationSurfaceYs[index] = Mth.clamp(vegetationSurface, minY, maxY - 1);
+								waterSurfaces[index] = waterSurface;
+								underwaterFlags[index] = underwater;
+							}
+						}
+					}
 				}
 			}
 		}
@@ -200,11 +294,18 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 				final boolean underwater = underwaterFlags[index];
 				final int coverClass = coverClasses[index];
 				final Holder<Biome> biomeHolder = biomeHolders[index];
-				final IDhApiBiomeWrapper biome = wrappers.getBiome(biomeHolder);
+				final IDhApiBiomeWrapper biome = biomeWrappers[index];
 				final EarthChunkGenerator.LodSurface lodSurface =
 						generator.resolveLodSurface(biomeHolder, worldX, worldZ, surfaceY, underwater, coverClass);
-				final IDhApiBlockStateWrapper fillerBlock = wrappers.getBlockState(lodSurface.filler());
-				final IDhApiBlockStateWrapper topBlock = wrappers.getBlockState(lodSurface.top());
+				final SurfaceWrapperPair surfaceWrapper = surfaceWrapperCache.computeIfAbsent(
+						new SurfaceWrapperKey(lodSurface.top(), lodSurface.filler()),
+						key -> new SurfaceWrapperPair(
+								wrappers.getBlockState(key.top()),
+								wrappers.getBlockState(key.filler())
+						)
+				);
+				final IDhApiBlockStateWrapper fillerBlock = surfaceWrapper.filler();
+				final IDhApiBlockStateWrapper topBlock = surfaceWrapper.top();
 				final int slopeDiff = lodSlopeDiff(surfaceYs, lodSizePoints, localX, localZ, cellSize);
 				final boolean useBadlandsBands = !underwater
 						&& slopeDiff >= BADLANDS_LOD_SLOPE_DIFF
@@ -247,7 +348,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 					lastLayerTop = surfaceTop;
 				}
 
-				final CanopyColumn canopyColumn = !underwater
+				final boolean allowCanopy = !underwater && coverClass == ESA_TREE_COVER;
+				final CanopyColumn canopyColumn = allowCanopy
 						? resolveCanopyColumn(biomeHolder, worldX, worldZ, cellSize)
 						: null;
 				if (canopyColumn != null && lastLayerTop < absoluteTop) {
@@ -288,12 +390,9 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 					final int waterTop = toLayerTop(waterSurface, minY, absoluteTop);
 					if (waterTop > lastLayerTop) {
 						final int waterDepth = waterSurface - vegetationSurfaceY;
-						final WaterVegetationColumn vegetation = resolveWaterVegetationColumn(
-								biomeHolder,
-								worldX,
-								worldZ,
-								waterDepth
-						);
+						final WaterVegetationColumn vegetation = allowWaterVegetation
+								? resolveWaterVegetationColumn(biomeHolder, worldX, worldZ, waterDepth)
+								: null;
 						if (vegetation != null) {
 							int vegetationBaseTop = toLayerTop(vegetationSurfaceY, minY, absoluteTop);
 							vegetationBaseTop = Mth.clamp(vegetationBaseTop, lastLayerTop, waterTop);
@@ -382,11 +481,17 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		final int maxBlockX = baseX + (lodSizePoints - 1) * cellSize + cellOffset;
 		final int maxBlockZ = baseZ + (lodSizePoints - 1) * cellSize + cellOffset;
 
-		prefetchAtBlock(minBlockX, minBlockZ);
-		prefetchAtBlock(minBlockX, maxBlockZ);
-		prefetchAtBlock(maxBlockX, minBlockZ);
-		prefetchAtBlock(maxBlockX, maxBlockZ);
-		prefetchAtBlock(Math.floorDiv(minBlockX + maxBlockX, 2), Math.floorDiv(minBlockZ + maxBlockZ, 2));
+		int grid = Math.min(LOD_PREFETCH_GRID_MAX, Math.max(LOD_PREFETCH_GRID_MIN, lodSizePoints / LOD_PREFETCH_GRID_DIVISOR));
+		if (grid <= 1) {
+			grid = 2;
+		}
+		for (int gz = 0; gz < grid; gz++) {
+			int worldZ = lerpBlock(minBlockZ, maxBlockZ, gz, grid);
+			for (int gx = 0; gx < grid; gx++) {
+				int worldX = lerpBlock(minBlockX, maxBlockX, gx, grid);
+				prefetchAtBlock(worldX, worldZ);
+			}
+		}
 		if (useDetailedWater
 				&& hasWaterNearLodArea(baseX, baseZ, lodSizePoints, cellSize, cellOffset, blendCells, true)) {
 			generator.prefetchLodWaterRegions(minBlockX, minBlockZ, maxBlockX, maxBlockZ);
@@ -414,20 +519,58 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 				}
 				final int worldX = baseX + localX * cellSize + cellOffset;
 				final int coverClass = generator.sampleCoverClass(worldX, worldZ);
-				final WaterSurfaceResolver.WaterColumnData column =
-						generator.resolveLodWaterColumn(worldX, worldZ, coverClass);
-				if (column.hasWater()) {
+				if (coverClass == ESA_WATER || coverClass == ESA_MANGROVES) {
 					return true;
+				}
+				if (coverClass == ESA_NO_DATA) {
+					final WaterSurfaceResolver.WaterColumnData column =
+							generator.resolveLodWaterColumn(worldX, worldZ, coverClass);
+					if (column.hasWater()) {
+						return true;
+					}
 				}
 			}
 		}
 		return false;
 	}
 
+	private static boolean isWaterCoverClass(final int coverClass) {
+		return coverClass == ESA_WATER || coverClass == ESA_NO_DATA || coverClass == ESA_MANGROVES;
+	}
+
+	private static int coverSampleStride(final int detailLevel, final int lodSizePoints) {
+		if (detailLevel < LOD_COVER_DOWNSAMPLE_START_DETAIL) {
+			return 1;
+		}
+		int shift = Math.min(2, detailLevel - LOD_COVER_DOWNSAMPLE_START_DETAIL + 1);
+		int stride = 1 << shift;
+		stride = Math.min(stride, LOD_DOWNSAMPLE_MAX_STRIDE);
+		return Math.min(stride, lodSizePoints);
+	}
+
+	private static int detailedWaterStride(final int detailLevel, final int lodSizePoints) {
+		if (detailLevel < LOD_DETAILED_WATER_STRIDE_DETAIL) {
+			return 1;
+		}
+		int shift = Math.min(2, detailLevel - LOD_DETAILED_WATER_STRIDE_DETAIL + 1);
+		int stride = 1 << shift;
+		stride = Math.min(stride, LOD_DOWNSAMPLE_MAX_STRIDE);
+		return Math.min(stride, lodSizePoints);
+	}
+
+
 	private void prefetchAtBlock(final int blockX, final int blockZ) {
 		final int chunkX = SectionPos.blockToSectionCoord(blockX);
 		final int chunkZ = SectionPos.blockToSectionCoord(blockZ);
 		generator.prefetchForChunk(chunkX, chunkZ);
+	}
+
+	private static int lerpBlock(int min, int max, int index, int count) {
+		if (count <= 1) {
+			return min;
+		}
+		double t = index / (double) (count - 1);
+		return (int) Math.round(min + (max - min) * t);
 	}
 
 	private static CanopyColumn resolveCanopyColumn(
@@ -886,6 +1029,13 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 			this.blockState = blockState;
 		}
 	}
+
+	private record SurfaceWrapperKey(BlockState top, BlockState filler) {
+	}
+
+	private record SurfaceWrapperPair(IDhApiBlockStateWrapper top, IDhApiBlockStateWrapper filler) {
+	}
+
 
 	@Override
 	public EDhApiWorldGeneratorReturnType getReturnType() {

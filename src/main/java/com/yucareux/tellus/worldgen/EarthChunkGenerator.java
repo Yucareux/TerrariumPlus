@@ -5,6 +5,7 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.world.data.cover.TellusLandCoverSource;
 import com.yucareux.tellus.world.data.elevation.TellusElevationSource;
+import com.yucareux.tellus.world.data.mask.TellusLandMaskSource;
 import com.yucareux.tellus.worldgen.geology.TellusGeologyGenerator;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -78,6 +79,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 	private static final double EQUATOR_CIRCUMFERENCE = 40075017.0;
 	private static final TellusElevationSource ELEVATION_SOURCE = TellusWorldgenSources.elevation();
 	private static final TellusLandCoverSource LAND_COVER_SOURCE = TellusWorldgenSources.landCover();
+	private static final TellusLandMaskSource LAND_MASK_SOURCE = TellusWorldgenSources.landMask();
 	private static final int COVER_ROLL_RANGE = 200;
 	private static final int SNOW_ICE_CHANCE = 3;
 	private static final int POWDER_SNOW_CHANCE = 30;
@@ -105,7 +107,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 			Blocks.LIGHT_GRAY_TERRACOTTA.defaultBlockState(),
 			Blocks.WHITE_TERRACOTTA.defaultBlockState()
 	};
-	private static final int CINEMATIC_MAX_WATER_DEPTH = 16;
 	private static final int LOD_MIN_WATER_DEPTH = 25;
 	private static final AtomicBoolean LOGGED_CHUNK_LAYOUT = new AtomicBoolean(false);
 
@@ -208,9 +209,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 			@NonNull StructureManager structures,
 			@NonNull ChunkAccess chunk
 	) {
-		if (this.settings.cinematicMode()) {
-			return;
-		}
 		if (SharedConstants.DEBUG_DISABLE_CARVERS) {
 			return;
 		}
@@ -257,9 +255,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 			@NonNull StructureTemplateManager templates,
 			@NonNull ResourceKey<Level> levelKey
 	) {
-		if (this.settings.cinematicMode()) {
-			return;
-		}
 		super.createStructures(registryAccess, structureState, structures, chunk, templates, levelKey);
 		if (this.settings.addIgloos()
 				&& !isFrozenPeaksChunk(chunk.getPos(), structureState.randomState())) {
@@ -273,9 +268,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 			@NonNull StructureManager structures,
 			@NonNull ChunkAccess chunk
 	) {
-		if (this.settings.cinematicMode()) {
-			return;
-		}
 		super.createReferences(level, structures, chunk);
 	}
 
@@ -309,9 +301,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 		int chunkX = pos.getMinBlockX() >> 4;
 		int chunkZ = pos.getMinBlockZ() >> 4;
 		WaterSurfaceResolver.WaterChunkData waterData = this.waterResolver.resolveChunkWaterData(chunkX, chunkZ);
-		if (this.settings.cinematicMode()) {
-			return fillFromNoiseCinematic(random, chunk, pos, chunkMinY, chunkMaxY, waterData);
-		}
 		BlockState stone = Blocks.STONE.defaultBlockState();
 		BlockState water = Blocks.WATER.defaultBlockState();
 		BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
@@ -434,162 +423,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 					if (surface >= this.seaLevel && coverClass == ESA_SNOW_ICE) {
 						if (slopeDiff < SNOW_SLOPE_DIFF) {
 							boolean reduceIce = biome.is(Biomes.FROZEN_PEAKS);
-							applySnowCover(chunk, cursor, worldX, worldZ, surface, chunkMinY, false, reduceIce);
-						}
-					}
-			}
-		}
-
-		return Objects.requireNonNull(CompletableFuture.<ChunkAccess>completedFuture(chunk), "completedFuture");
-	}
-
-	private @NonNull CompletableFuture<ChunkAccess> fillFromNoiseCinematic(
-			@NonNull RandomState random,
-			@NonNull ChunkAccess chunk,
-			@NonNull ChunkPos pos,
-			int chunkMinY,
-			int chunkMaxY,
-			WaterSurfaceResolver.WaterChunkData waterData
-	) {
-		BlockState stone = Blocks.STONE.defaultBlockState();
-		BlockState bedrock = Blocks.BEDROCK.defaultBlockState();
-		BlockState water = Blocks.WATER.defaultBlockState();
-		BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
-
-		int step = SLOPE_SAMPLE_STEP;
-		int gridSize = 16 + step * 2;
-		int[] heightGrid = new int[gridSize * gridSize];
-		int gridMinX = pos.getMinBlockX() - step;
-		int gridMinZ = pos.getMinBlockZ() - step;
-		for (int dz = 0; dz < gridSize; dz++) {
-			int worldZ = gridMinZ + dz;
-			int row = dz * gridSize;
-			for (int dx = 0; dx < gridSize; dx++) {
-				int worldX = gridMinX + dx;
-				heightGrid[row + dx] = sampleSurfaceHeight(worldX, worldZ);
-			}
-		}
-
-		int[] coverClasses = new int[16 * 16];
-		int[] waterSurfaces = new int[16 * 16];
-		boolean[] waterFlags = new boolean[16 * 16];
-		int[] cinematicSurfaces = new int[16 * 16];
-
-		int chunkMinX = pos.getMinBlockX();
-		int chunkMinZ = pos.getMinBlockZ();
-		int bedrockY = this.minY;
-		boolean bedrockInChunk = bedrockY >= chunkMinY && bedrockY < chunkMaxY;
-		for (int localX = 0; localX < 16; localX++) {
-			int worldX = chunkMinX + localX;
-			for (int localZ = 0; localZ < 16; localZ++) {
-				int worldZ = chunkMinZ + localZ;
-				int index = localZ * 16 + localX;
-				int coverClass = LAND_COVER_SOURCE.sampleCoverClass(worldX, worldZ, this.settings.worldScale());
-				int gridIndex = (localZ + step) * gridSize + (localX + step);
-				int cachedSurface = heightGrid[gridIndex];
-				ColumnHeights column = resolveColumnHeights(
-						worldX,
-						worldZ,
-						localX,
-						localZ,
-						chunkMinY,
-						chunkMaxY,
-						coverClass,
-						waterData,
-						cachedSurface
-				);
-				int terrainSurface = column.terrainSurface();
-				int waterSurface = column.waterSurface();
-				boolean hasWater = column.hasWater();
-				int surface = resolveCinematicSurface(terrainSurface, waterSurface, hasWater);
-
-				coverClasses[index] = coverClass;
-				waterSurfaces[index] = waterSurface;
-				waterFlags[index] = hasWater;
-				cinematicSurfaces[index] = surface;
-			}
-		}
-
-		int[] structureCaps = resolveStructureSurfaceCaps(chunk, chunkMinY);
-		boolean[] structureAdjusted = null;
-		if (structureCaps != null) {
-			structureAdjusted = new boolean[16 * 16];
-			for (int i = 0; i < cinematicSurfaces.length; i++) {
-				int cap = structureCaps[i];
-				if (cap != Integer.MAX_VALUE && cinematicSurfaces[i] > cap) {
-					cinematicSurfaces[i] = cap;
-					structureAdjusted[i] = true;
-				}
-			}
-		}
-
-		int[] slopeDiffs = new int[16 * 16];
-		@SuppressWarnings("unchecked")
-		Holder<Biome>[] biomeCache = (Holder<Biome>[]) new Holder[16 * 16];
-		for (int localX = 0; localX < 16; localX++) {
-			int worldX = chunkMinX + localX;
-			for (int localZ = 0; localZ < 16; localZ++) {
-				int worldZ = chunkMinZ + localZ;
-				int index = localZ * 16 + localX;
-				int surface = cinematicSurfaces[index];
-				int gridIndex = (localZ + step) * gridSize + (localX + step);
-				int slopeDiff = sampleSlopeDiffCached(heightGrid, gridSize, step, gridIndex, surface);
-				if (structureAdjusted != null && structureAdjusted[index]) {
-					slopeDiff = 0;
-				}
-				slopeDiffs[index] = slopeDiff;
-				biomeCache[index] = this.biomeSource.getNoiseBiome(
-						QuartPos.fromBlock(worldX),
-						QuartPos.fromBlock(surface),
-						QuartPos.fromBlock(worldZ),
-						random.sampler()
-				);
-			}
-		}
-
-		for (int localX = 0; localX < 16; localX++) {
-			int worldX = chunkMinX + localX;
-				for (int localZ = 0; localZ < 16; localZ++) {
-					int worldZ = chunkMinZ + localZ;
-					int index = localZ * 16 + localX;
-					int surface = cinematicSurfaces[index];
-					int waterSurface = waterSurfaces[index];
-					boolean hasWater = waterFlags[index];
-					boolean underwater = hasWater && waterSurface > surface;
-					int slopeDiff = slopeDiffs[index];
-					int coverClass = coverClasses[index];
-					Holder<Biome> biome = biomeCache[index];
-
-					if (surface >= chunkMinY && surface < chunkMaxY) {
-						BlockState top = resolveSurfaceTop(biome, worldX, worldZ, surface, underwater, slopeDiff, coverClass);
-						cursor.set(worldX, surface, worldZ);
-						chunk.setBlockState(cursor, top);
-					}
-				if (surface - 1 >= chunkMinY && surface - 1 < chunkMaxY) {
-					cursor.set(worldX, surface - 1, worldZ);
-					chunk.setBlockState(cursor, stone);
-				}
-				if (surface - 2 >= chunkMinY && surface - 2 < chunkMaxY) {
-					cursor.set(worldX, surface - 2, worldZ);
-					chunk.setBlockState(cursor, bedrock);
-				}
-				if (bedrockInChunk) {
-					cursor.set(worldX, bedrockY, worldZ);
-					chunk.setBlockState(cursor, bedrock);
-				}
-
-				if (hasWater && surface < waterSurface) {
-					int startY = Math.max(surface + 1, chunkMinY);
-					int endY = Math.min(waterSurface, chunkMaxY - 1);
-					for (int y = startY; y <= endY; y++) {
-						cursor.set(worldX, y, worldZ);
-						chunk.setBlockState(cursor, water);
-					}
-				}
-					if (surface >= this.seaLevel && coverClass == ESA_SNOW_ICE) {
-						if (slopeDiff < SNOW_SLOPE_DIFF) {
-							boolean reduceIce = biome.is(Biomes.FROZEN_PEAKS);
-							applySnowCover(chunk, cursor, worldX, worldZ, surface, chunkMinY, true, reduceIce);
+							applySnowCover(chunk, cursor, worldX, worldZ, surface, chunkMinY, reduceIce);
 						}
 					}
 			}
@@ -676,9 +510,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 		int coverClass = LAND_COVER_SOURCE.sampleCoverClass(x, z, this.settings.worldScale());
 		ColumnHeights column = resolveFastColumnHeights(x, z, heightAccessor.getMinY(), heightAccessor.getMaxY(), coverClass);
 		int surface = column.terrainSurface();
-		if (this.settings.cinematicMode()) {
-			surface = resolveCinematicSurface(surface, column.waterSurface(), column.hasWater());
-		}
 		if (heightmapType == Heightmap.Types.OCEAN_FLOOR_WG || heightmapType == Heightmap.Types.OCEAN_FLOOR) {
 			return surface + 1;
 		}
@@ -703,24 +534,9 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 		int coverClass = LAND_COVER_SOURCE.sampleCoverClass(x, z, this.settings.worldScale());
 		ColumnHeights column = resolveFastColumnHeights(x, z, minY, minY + height, coverClass);
 		int surface = column.terrainSurface();
-		if (this.settings.cinematicMode()) {
-			surface = resolveCinematicSurface(surface, column.waterSurface(), column.hasWater());
-		}
 		int surfaceIndex = surface - minY;
-			if (this.settings.cinematicMode()) {
-				boolean underwater = column.hasWater() && column.waterSurface() > surface;
-				if (surfaceIndex >= 0 && surfaceIndex < states.length) {
-					BlockState top = resolveSurfaceTop(random, x, z, surface, underwater, coverClass);
-					states[surfaceIndex] = top;
-				}
-			if (surfaceIndex - 1 >= 0 && surfaceIndex - 1 < states.length) {
-				states[surfaceIndex - 1] = Blocks.STONE.defaultBlockState();
-			}
-			if (surfaceIndex - 2 >= 0 && surfaceIndex - 2 < states.length) {
-				states[surfaceIndex - 2] = Blocks.BEDROCK.defaultBlockState();
-			}
-		} else {
-			for (int i = 0; i <= surfaceIndex; i++) {
+		for (int i = 0; i <= surfaceIndex; i++) {
+			if (i >= 0 && i < states.length) {
 				states[i] = Blocks.STONE.defaultBlockState();
 			}
 		}
@@ -817,12 +633,26 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 	}
 
 	private int sampleSurfaceHeight(int blockX, int blockZ) {
-		double elevation = ELEVATION_SOURCE.sampleElevationMeters(blockX, blockZ, this.settings.worldScale());
+		boolean oceanZoom = useOceanZoom(blockX, blockZ);
+		double elevation = ELEVATION_SOURCE.sampleElevationMeters(blockX, blockZ, this.settings.worldScale(), oceanZoom);
 		double heightScale = elevation >= 0.0 ? this.settings.terrestrialHeightScale() : this.settings.oceanicHeightScale();
 		double scaled = elevation * heightScale / this.settings.worldScale();
 		int offset = this.settings.heightOffset();
 		int height = elevation >= 0.0 ? Mth.ceil(scaled) : Mth.floor(scaled);
 		return height + offset;
+	}
+
+	private boolean useOceanZoom(double blockX, double blockZ) {
+		TellusLandMaskSource.LandMaskSample landSample =
+				LAND_MASK_SOURCE.sampleLandMask(blockX, blockZ, this.settings.worldScale());
+		if (!landSample.known()) {
+			return true;
+		}
+		if (landSample.land()) {
+			return false;
+		}
+		int coverClass = LAND_COVER_SOURCE.sampleCoverClass(blockX, blockZ, this.settings.worldScale());
+		return coverClass == ESA_NO_DATA;
 	}
 
 	private int sampleSlopeDiff(int worldX, int worldZ, int surface) {
@@ -881,20 +711,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 		int surface = Mth.clamp(column.terrainSurface(), minY, maxY);
 		int waterSurface = Mth.clamp(column.waterSurface(), minY, maxY);
 		return new ColumnHeights(surface, waterSurface, column.hasWater());
-	}
-
-	private int resolveCinematicSurface(int surface, int waterSurface, boolean hasWater) {
-		if (!this.settings.cinematicMode() || !hasWater || waterSurface <= surface) {
-			return surface;
-		}
-		int minSurface = waterSurface - CINEMATIC_MAX_WATER_DEPTH;
-		if (surface < minSurface) {
-			surface = minSurface;
-			if (surface >= waterSurface) {
-				surface = waterSurface - 1;
-			}
-		}
-		return surface;
 	}
 
 	private int resolveMangroveWaterSurface(int worldX, int worldZ, int maxY) {
@@ -1254,9 +1070,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 		}
 		List<HolderSet<PlacedFeature>> features = original.features();
 		for (int step = 0; step < features.size(); step++) {
-			if (settings.cinematicMode() && isUndergroundStep(step)) {
-				continue;
-			}
 			for (Holder<PlacedFeature> feature : features.get(step)) {
 				Holder<PlacedFeature> safeFeature = Objects.requireNonNull(feature, "feature");
 				if (!keepTrees && isTreeFeature(safeFeature.value())) {
@@ -1272,9 +1085,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 	}
 
 	private static int geologyFlags(EarthGeneratorSettings settings, boolean keepTrees) {
-		if (settings.cinematicMode()) {
-			return keepTrees ? 1 << 8 : 0;
-		}
 		int flags = 0;
 		if (settings.caveCarvers()) {
 			flags |= 1 << 0;
@@ -1556,7 +1366,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 			int worldZ,
 			int surface,
 			int minY,
-			boolean cinematic,
 			boolean reduceIce
 	) {
 		long seed = seedFromCoords(worldX, 0, worldZ) ^ 0x5DEECE66DL;
@@ -1568,11 +1377,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 			return;
 		}
 		if (roll < SNOW_ICE_CHANCE + POWDER_SNOW_CHANCE) {
-			if (cinematic) {
-				cursor.set(worldX, surface, worldZ);
-				chunk.setBlockState(cursor, Blocks.POWDER_SNOW.defaultBlockState());
-				return;
-			}
 			int depth = 1 + random.nextInt(MAX_POWDER_DEPTH);
 			for (int i = 0; i < depth; i++) {
 				int y = surface - i;
