@@ -401,6 +401,25 @@ public class EarthCustomizeScreen extends Screen {
 		boolean addWitchHuts = this.findToggleValue("add_witch_huts", true);
 		boolean addAncientCities = false;
 		boolean addTrialChambers = false;
+
+        EarthGeneratorSettings.StructureSettings structureSettings = new EarthGeneratorSettings.StructureSettings(
+                addStrongholds,
+                addVillages,
+                addMineshafts,
+                addOceanMonuments,
+                addWoodlandMansions,
+                addDesertTemples,
+                addJungleTemples,
+                addPillagerOutposts,
+                addRuinedPortals,
+                addShipwrecks,
+                addOceanRuins,
+                addBuriedTreasure,
+                addIgloos,
+                addWitchHuts,
+                addAncientCities,
+                addTrialChambers
+        );
 		boolean addTrailRuins = this.findToggleValue("add_trail_ruins", true);
 		boolean distantHorizonsWaterResolver = this.findToggleValue(
 				"distant_horizons_water_resolver",
@@ -410,6 +429,20 @@ public class EarthCustomizeScreen extends Screen {
 				"distant_horizons_render_mode",
 				EarthGeneratorSettings.DEFAULT.distantHorizonsRenderMode()
 		);
+        boolean flatVillages = this.findToggleValue("village_flat", false);
+        int radius = (int) Math.round(
+                this.findSliderValue("village_radius", EarthGeneratorSettings.DEFAULT.villageSettings().radius())
+        );
+        int heightRange =      (int) Math.round(
+                this.findSliderValue("village_height_range", EarthGeneratorSettings.DEFAULT.villageSettings().heightRange())
+        );
+
+        EarthGeneratorSettings.VillageSettings villageSettings = new EarthGeneratorSettings.VillageSettings(
+                flatVillages,
+                radius,
+                heightRange
+        );
+
 		return new EarthGeneratorSettings(
 				worldScale,
 				terrestrialScale,
@@ -432,25 +465,11 @@ public class EarthCustomizeScreen extends Screen {
 				oreDistribution,
 				geodes,
 				lavaPools,
-				addStrongholds,
-				addVillages,
-				addMineshafts,
-				addOceanMonuments,
-				addWoodlandMansions,
-				addDesertTemples,
-				addJungleTemples,
-				addPillagerOutposts,
-				addRuinedPortals,
-				addShipwrecks,
-				addOceanRuins,
-				addBuriedTreasure,
-				addIgloos,
-				addWitchHuts,
-				addAncientCities,
-				addTrialChambers,
-				addTrailRuins,
+                structureSettings,
+                addTrailRuins,
 				distantHorizonsWaterResolver,
-				renderMode
+				renderMode,
+                villageSettings
 		);
 	}
 
@@ -575,6 +594,14 @@ public class EarthCustomizeScreen extends Screen {
 				comingSoonButton()
 		)));
 
+        categories.add(new CategoryDefinition("experimental", List.of(
+                toggle("village_flat", EarthGeneratorSettings.DEFAULT.villageSettings().flatVillages()),
+                slider("village_radius", 64.0, 8.0, 128.0, 4.0)
+                        .withDisplay(EarthCustomizeScreen::formatBlocks),
+                slider("village_height_range", 20.0, 0.0, 128.0, 2.0)
+                        .withDisplay(EarthCustomizeScreen::formatBlocks)
+        )));
+
 		return categories;
 	}
 
@@ -637,6 +664,10 @@ public class EarthCustomizeScreen extends Screen {
 	private static String formatPercent(double value) {
 		return String.format(Locale.ROOT, "%.0f%%", value);
 	}
+
+    private static String formatBlocks(double value) {
+        return String.format(Locale.ROOT, "%.0f blocks", value);
+    }
 
 	private static String formatMaxAltitude(double value) {
 		return formatAltitude(value, AUTO_MAX_ALTITUDE);
