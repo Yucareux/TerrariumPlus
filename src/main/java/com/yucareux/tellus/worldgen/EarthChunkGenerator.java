@@ -29,6 +29,7 @@ import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.QuartPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.tags.StructureTags;
 import net.minecraft.tags.TagKey;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
@@ -130,17 +131,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 		this.height = limits.height();
 		this.waterResolver = TellusWorldgenSources.waterResolver(settings);
 		if (Tellus.LOGGER.isInfoEnabled()) {
-			Tellus.LOGGER.info(
-					"EarthChunkGenerator init: scale={}, minAltitude={}, maxAltitude={}, heightOffset={}, limits=[minY={}, height={}, logicalHeight={}], seaLevel={}",
-					settings.worldScale(),
-					settings.minAltitude(),
-					settings.maxAltitude(),
-					settings.heightOffset(),
-					limits.minY(),
-					limits.height(),
-					limits.logicalHeight(),
-					this.seaLevel
-			);
+
 		}
 	}
 
@@ -256,10 +247,13 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 			@NonNull ResourceKey<Level> levelKey
 	) {
 		super.createStructures(registryAccess, structureState, structures, chunk, templates, levelKey);
-		if (this.settings.addIgloos()
+		if (this.settings.structureSettings().addIgloos()
 				&& !isFrozenPeaksChunk(chunk.getPos(), structureState.randomState())) {
 			stripIglooStarts(registryAccess, chunk);
 		}
+        if (this.settings.villageSettings().flatVillages()) {
+            stripVillagesOnSteepTerrain(registryAccess, chunk);
+        }
 	}
 
 	@Override
@@ -284,19 +278,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 		int chunkHeight = chunk.getHeight();
 		int chunkMaxY = chunkMinY + chunkHeight;
 		if (LOGGED_CHUNK_LAYOUT.compareAndSet(false, true) && Tellus.LOGGER.isInfoEnabled()) {
-			Tellus.LOGGER.info(
-					"fillFromNoise layout: chunkPos={}, minY={}, height={}, maxY={}, sections={}, genMinY={}, genHeight={}, seaLevel={}, settingsMinAlt={}, settingsMaxAlt={}",
-					pos,
-					chunkMinY,
-					chunkHeight,
-					chunkMinY + chunkHeight - 1,
-					chunkHeight >> 4,
-					this.minY,
-					this.height,
-					this.seaLevel,
-					this.settings.minAltitude(),
-					this.settings.maxAltitude()
-			);
+
 		}
 		int chunkX = pos.getMinBlockX() >> 4;
 		int chunkZ = pos.getMinBlockZ() >> 4;
@@ -558,7 +540,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 
 	@Override
 	public void addDebugScreenInfo(@NonNull List<String> info, @NonNull RandomState random, @NonNull BlockPos pos) {
-		info.add(String.format("Tellus scale: %.1f", this.settings.worldScale()));
+		info.add(String.format("Tellus scale:" + this.settings.worldScale()));
 	}
 
 	private void placeTrees(WorldGenLevel level, ChunkAccess chunk) {
@@ -1122,8 +1104,8 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 	private static boolean shouldKeepCarver(Holder<ConfiguredWorldCarver<?>> carver, EarthGeneratorSettings settings) {
 		return carver.unwrapKey()
 				.map(ResourceKey::identifier)
-				.map(id -> shouldKeepCarverId(id.getPath(), settings))
-				.orElse(true);
+				.map(id ->  shouldKeepCarverId(id.getPath(), settings))
+				.orElse(Boolean.TRUE);
 	}
 
 	private static boolean shouldKeepCarverId(String path, EarthGeneratorSettings settings) {
@@ -1143,7 +1125,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 		return feature.unwrapKey()
 				.map(ResourceKey::identifier)
 				.map(id -> shouldKeepFeatureId(id.getPath(), settings))
-				.orElse(true);
+				.orElse(Boolean.TRUE);
 	}
 
 	private static boolean shouldKeepFeatureId(String path, EarthGeneratorSettings settings) {
@@ -1197,61 +1179,61 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 		return structure.unwrapKey()
 				.map(ResourceKey::identifier)
 				.map(id -> isStructureEnabled(id.getPath()))
-				.orElse(true);
+				.orElse(Boolean.TRUE);
 	}
 
 	private boolean isStructureEnabled(String path) {
-		if (path.startsWith("village")) {
-			return this.settings.addVillages();
-		}
-		if (path.equals("stronghold")) {
-			return this.settings.addStrongholds();
-		}
-		if (path.startsWith("mineshaft")) {
-			return this.settings.addMineshafts();
-		}
-		if (path.equals("igloo")) {
-			return this.settings.addIgloos();
-		}
-		if (path.equals("ocean_monument")) {
-			return this.settings.addOceanMonuments();
-		}
-		if (path.equals("woodland_mansion")) {
-			return this.settings.addWoodlandMansions();
-		}
-		if (path.equals("desert_pyramid") || path.equals("desert_temple")) {
-			return this.settings.addDesertTemples();
-		}
-		if (path.equals("jungle_pyramid") || path.equals("jungle_temple")) {
-			return this.settings.addJungleTemples();
-		}
-		if (path.equals("pillager_outpost")) {
-			return this.settings.addPillagerOutposts();
-		}
-		if (path.startsWith("ruined_portal")) {
-			return this.settings.addRuinedPortals();
+        switch (path) {
+            case "stronghold" -> {
+                return this.settings.structureSettings().addStrongholds();
+            }
+            case "igloo" -> {
+                return this.settings.structureSettings().addIgloos();
+            }
+            case "ocean_monument" -> {
+                return this.settings.structureSettings().addOceanMonuments();
+            }
+            case "woodland_mansion" -> {
+                return this.settings.structureSettings().addWoodlandMansions();
+            }
+            case "desert_pyramid", "desert_temple" -> {
+                return this.settings.structureSettings().addDesertTemples();
+            }
+            case "jungle_pyramid", "jungle_temple" -> {
+                return this.settings.structureSettings().addJungleTemples();
+            }
+            case "pillager_outpost" -> {
+                return this.settings.structureSettings().addPillagerOutposts();
+            }
+            case "buried_treasure" -> {
+                return this.settings.structureSettings().addBuriedTreasure();
+            }
+            case "swamp_hut", "witch_hut" -> {
+                return this.settings.structureSettings().addWitchHuts();
+            }
+            case "ancient_city" -> {
+                return this.settings.structureSettings().addAncientCities();
+            }
+            case "trial_chambers" -> {
+                return this.settings.structureSettings().addTrialChambers();
+            }
+        }
+
+        if (path.startsWith("ruined_portal")) {
+			return this.settings.structureSettings().addRuinedPortals();
 		}
 		if (path.startsWith("shipwreck")) {
-			return this.settings.addShipwrecks();
+			return this.settings.structureSettings().addShipwrecks();
 		}
 		if (path.startsWith("ocean_ruin")) {
-			return this.settings.addOceanRuins();
+			return this.settings.structureSettings().addOceanRuins();
 		}
-		if (path.equals("buried_treasure")) {
-			return this.settings.addBuriedTreasure();
-		}
-		if (path.equals("igloo")) {
-			return this.settings.addIgloos();
-		}
-		if (path.equals("swamp_hut") || path.equals("witch_hut")) {
-			return this.settings.addWitchHuts();
-		}
-		if (path.equals("ancient_city")) {
-			return this.settings.addAncientCities();
-		}
-		if (path.equals("trial_chambers")) {
-			return this.settings.addTrialChambers();
-		}
+        if (path.startsWith("village")) {
+            return this.settings.structureSettings().addVillages();
+        }
+        if (path.startsWith("mineshaft")) {
+            return this.settings.structureSettings().addMineshafts();
+        }
 		if (path.startsWith("trail_ruins")) {
 			return this.settings.addTrailRuins();
 		}
@@ -1272,7 +1254,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 
 	private void stripIglooStarts(RegistryAccess registryAccess, ChunkAccess chunk) {
 		Registry<Structure> registry = registryAccess.lookupOrThrow(Registries.STRUCTURE);
-		@NonNull Structure igloo = Objects.requireNonNull(
+		Structure igloo = Objects.requireNonNull(
 				registry.getValueOrThrow(BuiltinStructures.IGLOO),
 				"iglooStructure"
 		);
@@ -1283,6 +1265,48 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 		chunk.setStartForStructure(igloo, StructureStart.INVALID_START);
 		chunk.getAllReferences().remove(igloo);
 	}
+
+    private void stripVillagesOnSteepTerrain(RegistryAccess registryAccess, ChunkAccess chunk) {
+        Registry<Structure> registry = registryAccess.lookupOrThrow(Registries.STRUCTURE);
+
+        // Get all village structures using the tag
+        HolderSet.Named<Structure> villageTag = registry.getOrThrow(StructureTags.VILLAGE);
+
+        // Check if any village is present
+        boolean hasVillage = false;
+        for (Holder<Structure> villageHolder : villageTag) {
+            if (hasValidStructure(chunk, villageHolder.value())) {
+                hasVillage = true;
+                break;
+            }
+        }
+
+        // Only check flatness if a village exists
+        if (hasVillage) {
+            ChunkPos pos = chunk.getPos();
+            int centerX = pos.getMinBlockX() + 8;
+            int centerZ = pos.getMinBlockZ() + 8;
+
+            if (!isGroundFlat(centerX, centerZ, settings.villageSettings().radius(), settings.villageSettings().heightRange())) {
+                // Remove all villages in the tag
+                for (Holder<Structure> villageHolder : villageTag) {
+                    removeStructureIfPresent(chunk, villageHolder.value());
+                }
+            }
+        }
+    }
+
+    private boolean hasValidStructure(ChunkAccess chunk, Structure structure) {
+        StructureStart start = chunk.getStartForStructure(structure);
+        return start != null && start.isValid();
+    }
+
+    private void removeStructureIfPresent(ChunkAccess chunk, Structure structure) {
+        StructureStart start = chunk.getStartForStructure(structure);
+        if (start != null && start.isValid()) {
+            chunk.setStartForStructure(structure, StructureStart.INVALID_START);
+        }
+    }
 
 	private static List<ConfiguredFeature<?, ?>> treeFeaturesForBiome(Holder<Biome> biome) {
 		return TREE_FEATURES.computeIfAbsent(biome, holder -> {
@@ -1342,6 +1366,24 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 			return Objects.requireNonNull(this.delegate.get(tag), "getStructureSetTag");
 		}
 	}
+
+    private boolean isGroundFlat(int centerX, int centerZ, int radius, int maxHeightDifference) {
+        int centerHeight = sampleSurfaceHeight(centerX, centerZ);
+        int minHeight = centerHeight;
+        int maxHeight = centerHeight;
+
+        // Sample points in a grid around the center
+        int step = 4; // Sample every 4 blocks
+        for (int dx = -radius; dx <= radius; dx += step) {
+            for (int dz = -radius; dz <= radius; dz += step) {
+                int height = sampleSurfaceHeight(centerX + dx, centerZ + dz);
+                minHeight = Math.min(minHeight, height);
+                maxHeight = Math.max(maxHeight, height);
+            }
+        }
+
+        return (maxHeight - minHeight) <= maxHeightDifference;
+    }
 
 	private TellusGeologyGenerator getGeologyGenerator(long seed) {
 		TellusGeologyGenerator cached = this.geologyGenerator;

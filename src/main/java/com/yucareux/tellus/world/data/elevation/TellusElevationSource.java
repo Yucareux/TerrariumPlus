@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import javax.imageio.ImageIO;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.util.Mth;
+import org.jetbrains.annotations.NotNull;
 import org.jspecify.annotations.NonNull;
 
 public final class TellusElevationSource {
@@ -34,13 +35,13 @@ public final class TellusElevationSource {
 	private static final int MAX_CACHE_TILES = intProperty("tellus.elevation.cacheTiles", 512);
 
 	private final Path cacheRoot;
-	private final LoadingCache<@NonNull TileKey, ShortRaster> cache;
+	private final LoadingCache<@NonNull TileKey, @NotNull ShortRaster> cache;
 
 	public TellusElevationSource() {
 		this.cacheRoot = FabricLoader.getInstance().getGameDir().resolve("tellus/cache/elevation-tellus");
 		this.cache = CacheBuilder.newBuilder()
 				.maximumSize(MAX_CACHE_TILES)
-				.build(new CacheLoader<@NonNull TileKey, ShortRaster>() {
+				.build(new CacheLoader<@NonNull TileKey, @NotNull ShortRaster>() {
 					@Override
 					public ShortRaster load(@NonNull TileKey key) throws Exception {
 						return TellusElevationSource.this.loadTile(key);

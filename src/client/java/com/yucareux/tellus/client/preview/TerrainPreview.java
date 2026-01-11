@@ -21,6 +21,7 @@ import net.minecraft.client.gui.render.state.GuiElementRenderState;
 import net.minecraft.client.gui.render.state.GuiRenderState;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.util.Mth;
+import org.jetbrains.annotations.NotNull;
 import org.joml.Matrix3x2f;
 import org.joml.Matrix3x2fc;
 import org.joml.Matrix4f;
@@ -742,7 +743,7 @@ public final class TerrainPreview implements AutoCloseable {
 
 	private static final class PreviewThreadFactory implements ThreadFactory {
 		@Override
-		public Thread newThread(Runnable runnable) {
+		public Thread newThread(@NotNull Runnable runnable) {
 			Thread thread = new Thread(runnable, "tellus-preview");
 			thread.setDaemon(true);
 			return thread;

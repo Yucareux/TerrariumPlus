@@ -105,3 +105,12 @@ publishing {
 		// retrieving dependencies.
 	}
 }
+
+loom {
+    runs {
+        client {
+            vmArgs "-Dorg.lwjgl.glfw.libname=glfw"
+        }
+    }
+}
+

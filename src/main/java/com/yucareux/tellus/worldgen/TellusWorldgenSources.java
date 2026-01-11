@@ -15,6 +15,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.world.level.ChunkPos;
+import org.jetbrains.annotations.NotNull;
 import org.jspecify.annotations.NonNull;
 
 final class TellusWorldgenSources {
@@ -89,7 +90,8 @@ final class TellusWorldgenSources {
 
 	private static void submitPrefetch(Runnable task) {
 		try {
-			PREFETCH_EXECUTOR.execute(task);
+            assert PREFETCH_EXECUTOR != null;
+            PREFETCH_EXECUTOR.execute(task);
 		} catch (RuntimeException ignored) {
 			// Prefetch is best-effort; ignore rejections.
 		}
@@ -107,7 +109,7 @@ final class TellusWorldgenSources {
 			private final AtomicInteger index = new AtomicInteger();
 
 			@Override
-			public Thread newThread(Runnable runnable) {
+			public Thread newThread(@NotNull Runnable runnable) {
 				Thread thread = new Thread(runnable, "tellus-prefetch-" + index.incrementAndGet());
 				thread.setDaemon(true);
 				return thread;
@@ -193,7 +195,7 @@ final class TellusWorldgenSources {
 		}
 
 		@Override
-		public void execute(Runnable command) {
+		public void execute(@NotNull Runnable command) {
 			maybeAdjustCore();
 			super.execute(command);
 		}

@@ -259,7 +259,7 @@ public final class TellusGeologyGenerator {
 				}
 				cursor.set(worldX, ceilingY, worldZ);
 				if (!chunk.getBlockState(cursor).isAir()) {
-					@NonNull BlockState drip = Objects.requireNonNull(
+					BlockState drip = Objects.requireNonNull(
 							Blocks.POINTED_DRIPSTONE.defaultBlockState()
 									.setValue(BlockStateProperties.VERTICAL_DIRECTION, Direction.DOWN),
 							"dripstoneState"
@@ -333,7 +333,7 @@ public final class TellusGeologyGenerator {
 	}
 
 	private static long seedFromCoords(int x, int y, int z) {
-		long seed = (long) (x * 3129871) ^ (long) z * 116129781L ^ (long) y;
+		long seed = (x * 3129871L) ^ (long) z * 116129781L ^ (long) y;
 		seed = seed * seed * 42317861L + seed * 11L;
 		return seed >> 16;
 	}

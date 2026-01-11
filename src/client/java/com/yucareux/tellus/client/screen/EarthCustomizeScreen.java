@@ -186,7 +186,7 @@ public class EarthCustomizeScreen extends Screen {
 				"updatedDimensionType"
 		);
 
-		@NonNull ResourceKey<DimensionType> overworldKey = Objects.requireNonNull(
+		ResourceKey<DimensionType> overworldKey = Objects.requireNonNull(
 				overworldStem.type().unwrapKey().orElse(DYNAMIC_DIMENSION_TYPE_KEY),
 				"overworldDimensionTypeKey"
 		);
@@ -194,7 +194,7 @@ public class EarthCustomizeScreen extends Screen {
 		LayeredRegistryAccess<RegistryLayer> registriesWithTypes = registryUpdate.registries();
 		HolderLookup.RegistryLookup<DimensionType> dimensionTypes =
 				registriesWithTypes.compositeAccess().lookupOrThrow(Registries.DIMENSION_TYPE);
-		@NonNull Holder<DimensionType> overworldHolder = Objects.requireNonNull(
+		Holder<DimensionType> overworldHolder = Objects.requireNonNull(
 				registryUpdate.holder(),
 				"overworldDimensionTypeHolder"
 		);
@@ -291,7 +291,7 @@ public class EarthCustomizeScreen extends Screen {
 			@NonNull LayeredRegistryAccess<RegistryLayer> registries,
 			@NonNull Registry<LevelStem> updatedLevelStems
 	) {
-		@NonNull LayeredRegistryAccess<RegistryLayer> updated = registries;
+		LayeredRegistryAccess<RegistryLayer> updated = registries;
 		boolean updatedAny = false;
 		for (RegistryLayer layer : RegistryLayer.values()) {
 			RegistryAccess.Frozen layerAccess = updated.getLayer(layer);
@@ -401,6 +401,25 @@ public class EarthCustomizeScreen extends Screen {
 		boolean addWitchHuts = this.findToggleValue("add_witch_huts", true);
 		boolean addAncientCities = false;
 		boolean addTrialChambers = false;
+
+        EarthGeneratorSettings.StructureSettings structureSettings = new EarthGeneratorSettings.StructureSettings(
+                addStrongholds,
+                addVillages,
+                addMineshafts,
+                addOceanMonuments,
+                addWoodlandMansions,
+                addDesertTemples,
+                addJungleTemples,
+                addPillagerOutposts,
+                addRuinedPortals,
+                addShipwrecks,
+                addOceanRuins,
+                addBuriedTreasure,
+                addIgloos,
+                addWitchHuts,
+                addAncientCities,
+                addTrialChambers
+        );
 		boolean addTrailRuins = this.findToggleValue("add_trail_ruins", true);
 		boolean distantHorizonsWaterResolver = this.findToggleValue(
 				"distant_horizons_water_resolver",
@@ -410,6 +429,20 @@ public class EarthCustomizeScreen extends Screen {
 				"distant_horizons_render_mode",
 				EarthGeneratorSettings.DEFAULT.distantHorizonsRenderMode()
 		);
+        boolean flatVillages = this.findToggleValue("village_flat", false);
+        int radius = (int) Math.round(
+                this.findSliderValue("village_radius", EarthGeneratorSettings.DEFAULT.villageSettings().radius())
+        );
+        int heightRange =      (int) Math.round(
+                this.findSliderValue("village_height_range", EarthGeneratorSettings.DEFAULT.villageSettings().heightRange())
+        );
+
+        EarthGeneratorSettings.VillageSettings villageSettings = new EarthGeneratorSettings.VillageSettings(
+                flatVillages,
+                radius,
+                heightRange
+        );
+
 		return new EarthGeneratorSettings(
 				worldScale,
 				terrestrialScale,
@@ -432,31 +465,17 @@ public class EarthCustomizeScreen extends Screen {
 				oreDistribution,
 				geodes,
 				lavaPools,
-				addStrongholds,
-				addVillages,
-				addMineshafts,
-				addOceanMonuments,
-				addWoodlandMansions,
-				addDesertTemples,
-				addJungleTemples,
-				addPillagerOutposts,
-				addRuinedPortals,
-				addShipwrecks,
-				addOceanRuins,
-				addBuriedTreasure,
-				addIgloos,
-				addWitchHuts,
-				addAncientCities,
-				addTrialChambers,
-				addTrailRuins,
+                structureSettings,
+                addTrailRuins,
 				distantHorizonsWaterResolver,
-				renderMode
+				renderMode,
+                villageSettings
 		);
 	}
 
 	private double findSliderValue(String key, double fallback) {
 		for (CategoryDefinition category : this.categories) {
-			for (SettingDefinition setting : category.getSettings()) {
+			for (SettingDefinition setting : category.settings()) {
 				if (setting instanceof SliderDefinition slider && slider.key.equals(key)) {
 					return slider.value;
 				}
@@ -467,7 +486,7 @@ public class EarthCustomizeScreen extends Screen {
 
 	private boolean findToggleValue(String key, boolean fallback) {
 		for (CategoryDefinition category : this.categories) {
-			for (SettingDefinition setting : category.getSettings()) {
+			for (SettingDefinition setting : category.settings()) {
 				if (setting instanceof ToggleDefinition toggle && toggle.key.equals(key)) {
 					return toggle.value;
 				}
@@ -481,7 +500,7 @@ public class EarthCustomizeScreen extends Screen {
 			EarthGeneratorSettings.DistantHorizonsRenderMode fallback
 	) {
 		for (CategoryDefinition category : this.categories) {
-			for (SettingDefinition setting : category.getSettings()) {
+			for (SettingDefinition setting : category.settings()) {
 				if (setting instanceof ModeDefinition mode && mode.key.equals(key)) {
 					return mode.value;
 				}
@@ -575,6 +594,14 @@ public class EarthCustomizeScreen extends Screen {
 				comingSoonButton()
 		)));
 
+        categories.add(new CategoryDefinition("experimental", List.of(
+                toggle("village_flat", EarthGeneratorSettings.DEFAULT.villageSettings().flatVillages()),
+                slider("village_radius", 64.0, 8.0, 128.0, 4.0)
+                        .withDisplay(EarthCustomizeScreen::formatBlocks),
+                slider("village_height_range", 20.0, 0.0, 128.0, 2.0)
+                        .withDisplay(EarthCustomizeScreen::formatBlocks)
+        )));
+
 		return categories;
 	}
 
@@ -637,6 +664,10 @@ public class EarthCustomizeScreen extends Screen {
 	private static String formatPercent(double value) {
 		return String.format(Locale.ROOT, "%.0f%%", value);
 	}
+
+    private static String formatBlocks(double value) {
+        return String.format(Locale.ROOT, "%.0f blocks", value);
+    }
 
 	private static String formatMaxAltitude(double value) {
 		return formatAltitude(value, AUTO_MAX_ALTITUDE);
@@ -734,7 +765,7 @@ public class EarthCustomizeScreen extends Screen {
 				copy.register(key, value, info);
 			}
 
-			@NonNull Optional<KnownPack> emptyKnownPack = Objects.requireNonNull(
+			Optional<KnownPack> emptyKnownPack = Objects.requireNonNull(
 					Optional.<KnownPack>empty(),
 					"emptyKnownPack"
 			);
@@ -838,41 +869,31 @@ public class EarthCustomizeScreen extends Screen {
 				.build();
 		this.list.addWidget(back);
 
-		for (SettingDefinition setting : category.getSettings()) {
+		for (SettingDefinition setting : category.settings()) {
 			this.list.addWidget(setting.createWidget(this::onSettingsChanged));
 		}
 		this.list.setScrollAmount(0.0);
 	}
 
-	private static final class CategoryDefinition {
-		private final String id;
-		private final List<SettingDefinition> settings;
+    private record CategoryDefinition(String id, List<SettingDefinition> settings) {
 
-		private CategoryDefinition(String id, List<SettingDefinition> settings) {
-			this.id = id;
-			this.settings = settings;
-		}
+        private @NonNull Component getLabel() {
+            return this.getLabel(false);
+        }
 
-		private @NonNull Component getLabel() {
-			return this.getLabel(false);
-		}
+        private @NonNull Component getLabel(boolean selected) {
+            Component base = Objects.requireNonNull(
+                    Component.translatable("category.tellus." + this.id + ".name"),
+                    "categoryLabel"
+            );
+            if (!selected) {
+                return base;
+            }
+            return Objects.requireNonNull(base.copy().withStyle(ChatFormatting.YELLOW), "selectedCategoryLabel");
+        }
 
-		private @NonNull Component getLabel(boolean selected) {
-			Component base = Objects.requireNonNull(
-					Component.translatable("category.tellus." + this.id + ".name"),
-					"categoryLabel"
-			);
-			if (!selected) {
-				return base;
-			}
-			return Objects.requireNonNull(base.copy().withStyle(ChatFormatting.YELLOW), "selectedCategoryLabel");
-		}
 
-		private List<SettingDefinition> getSettings() {
-			return this.settings;
-		}
-
-	}
+    }
 
 	private static final class ToggleDefinition implements SettingDefinition {
 		private final String key;

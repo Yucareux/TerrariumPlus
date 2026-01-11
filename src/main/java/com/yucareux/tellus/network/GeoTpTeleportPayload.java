@@ -27,8 +27,8 @@ public record GeoTpTeleportPayload(double latitude, double longitude) implements
 
 	private static GeoTpTeleportPayload fromBoxed(Double latitude, Double longitude) {
 		return new GeoTpTeleportPayload(
-				Objects.requireNonNull(latitude, "latitude").doubleValue(),
-				Objects.requireNonNull(longitude, "longitude").doubleValue()
+                Objects.requireNonNull(latitude, "latitude"),
+                Objects.requireNonNull(longitude, "longitude")
 		);
 	}
 }

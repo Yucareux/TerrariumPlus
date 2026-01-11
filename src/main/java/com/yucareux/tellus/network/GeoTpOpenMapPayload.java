@@ -27,8 +27,8 @@ public record GeoTpOpenMapPayload(double latitude, double longitude) implements 
 
 	private static GeoTpOpenMapPayload fromBoxed(Double latitude, Double longitude) {
 		return new GeoTpOpenMapPayload(
-				Objects.requireNonNull(latitude, "latitude").doubleValue(),
-				Objects.requireNonNull(longitude, "longitude").doubleValue()
+                Objects.requireNonNull(latitude, "latitude"),
+                Objects.requireNonNull(longitude, "longitude")
 		);
 	}
 }

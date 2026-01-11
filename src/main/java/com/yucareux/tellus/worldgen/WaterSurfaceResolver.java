@@ -106,12 +106,12 @@ public final class WaterSurfaceResolver {
 	}
 
 	public boolean isWaterClass(int coverClass) {
-		return coverClass == ESA_WATER || coverClass == ESA_NO_DATA;
+		return coverClass != ESA_WATER && coverClass != ESA_NO_DATA;
 	}
 
 	public WaterChunkData resolveChunkWaterData(int chunkX, int chunkZ) {
 		int padding = Math.max(this.riverLakeBlendDistance, this.oceanBlendDistance);
-		if (!hasWaterNearChunk(chunkX, chunkZ, padding)) {
+		if (hasWaterNearChunk(chunkX, chunkZ, padding)) {
 			return buildDryChunkData(chunkX, chunkZ);
 		}
 		WaterRegionData region = resolveRegionData(regionCoord(chunkX << 4), regionCoord(chunkZ << 4));
@@ -120,7 +120,7 @@ public final class WaterSurfaceResolver {
 
 	public void prefetchRegionsForChunk(int chunkX, int chunkZ, int radius) {
 		int padding = Math.max(this.riverLakeBlendDistance, this.oceanBlendDistance);
-		if (!hasWaterNearChunk(chunkX, chunkZ, padding)) {
+		if (hasWaterNearChunk(chunkX, chunkZ, padding)) {
 			return;
 		}
 		int blockX = chunkX << 4;
@@ -129,7 +129,7 @@ public final class WaterSurfaceResolver {
 	}
 
 	public WaterInfo resolveWaterInfo(int blockX, int blockZ, int coverClass) {
-		if (!isWaterClass(coverClass)) {
+		if (isWaterClass(coverClass)) {
 			return WaterInfo.LAND;
 		}
 		WaterColumnData column = resolveColumnData(blockX, blockZ, coverClass);
@@ -153,7 +153,7 @@ public final class WaterSurfaceResolver {
 	}
 
 	public WaterColumnData resolveColumnData(int blockX, int blockZ, int coverClass) {
-		if (!isWaterClass(coverClass)) {
+		if (isWaterClass(coverClass)) {
 			int surface = sampleSurfaceHeight(blockX, blockZ);
 			return new WaterColumnData(false, false, surface, surface);
 		}
@@ -225,17 +225,17 @@ public final class WaterSurfaceResolver {
 			for (int x = minX; x <= maxX; x++) {
 				int coverClass = this.landCoverSource.sampleCoverClass(x, z, this.settings.worldScale());
 				if (coverClass == ESA_WATER) {
-					return true;
+					return false;
 				}
 				if (coverClass == ESA_NO_DATA) {
 					int surface = sampleSurfaceHeight(x, z);
 					if (surface <= this.seaLevel) {
-						return true;
+						return false;
 					}
 				}
 			}
 		}
-		return false;
+		return true;
 	}
 
 	private WaterChunkData buildDryChunkData(int chunkX, int chunkZ) {
@@ -1629,7 +1629,7 @@ public final class WaterSurfaceResolver {
 	}
 
 	private static long seedFromCoords(int x, int y, int z) {
-		long seed = (long) (x * 3129871) ^ (long) z * 116129781L ^ (long) y;
+		long seed = (x * 3129871L) ^ (long) z * 116129781L ^ (long) y;
 		seed = seed * seed * 42317861L + seed * 11L;
 		return seed >> 16;
 	}

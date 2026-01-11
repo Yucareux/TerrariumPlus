@@ -16,6 +16,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.zip.GZIPInputStream;
+
+import org.jetbrains.annotations.NotNull;
 import org.jspecify.annotations.Nullable;
 
 final class PmTilesReader {
@@ -26,7 +28,7 @@ final class PmTilesReader {
 	private static final int CONNECT_TIMEOUT_MS = 10000;
 
 	private final String url;
-	private final LoadingCache<DirectoryKey, Directory> directoryCache;
+	private final LoadingCache<@NotNull DirectoryKey, @NotNull Directory> directoryCache;
 	private @Nullable PmTilesHeader header;
 	private @Nullable Directory rootDirectory;
 
@@ -277,7 +279,7 @@ final class PmTilesReader {
 			int s = 1 << a;
 			int rx = (s & x);
 			int ry = (s & y);
-			acc += ((long) ((3 * rx) ^ ry)) << a;
+			acc += (((3L * rx) ^ ry)) << a;
 			int[] rotated = rotate(s, x, y, rx, ry);
 			x = rotated[0];
 			y = rotated[1];

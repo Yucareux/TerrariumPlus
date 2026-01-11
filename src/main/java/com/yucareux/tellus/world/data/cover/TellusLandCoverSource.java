@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.zip.InflaterInputStream;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.util.Mth;
+import org.jetbrains.annotations.NotNull;
 
 public final class TellusLandCoverSource {
 	private static final double EQUATOR_CIRCUMFERENCE = 40075017.0;
@@ -48,7 +49,7 @@ public final class TellusLandCoverSource {
 	private static final String TILE_PATTERN = "ESA_WorldCover_10m_2021_v200_%s_Map.tif";
 
 	private final Path cacheRoot;
-	private final LoadingCache<TileKey, GeoTiffTile> cache;
+	private final LoadingCache<@NotNull TileKey, @NotNull GeoTiffTile> cache;
 
 	public TellusLandCoverSource() {
 		this.cacheRoot = FabricLoader.getInstance().getGameDir().resolve("tellus/cache/worldcover2021");

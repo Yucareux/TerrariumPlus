@@ -14,6 +14,7 @@
   "category.tellus.geological.name": "Geological Settings",
   "category.tellus.structure.name": "Structure Settings",
   "category.tellus.compatibility.name": "Compatibility Settings",
+  "category.tellus.experimental.name": "Experimental Settings",
   "property.tellus.world_scale.name": "World Scale",
   "property.tellus.terrestrial_height_scale.name": "Terrestrial Height Scale",
   "property.tellus.oceanic_height_scale.name": "Oceanic Height Scale",
@@ -102,5 +103,11 @@
   "property.tellus.distant_horizons_render_mode.value.detailed": "Detailed (Slow)",
   "property.tellus.distant_horizons_water_resolver.name": "LOD Water Resolver",
   "property.tellus.distant_horizons_water_resolver.tooltip": "Use detailed water depths for DH fast LODs (slower)",
-  "property.tellus.locked.name": "This feature is not currently available"
+  "property.tellus.locked.name": "This feature is not currently available",
+  "property.tellus.village_flat.name": "Village Flatness Check",
+  "property.tellus.village_radius.name": "Village Radius",
+  "property.tellus.village_height_range.name": "Village Height Range",
+  "property.tellus.village_flat.tooltip": "If enabled, only places villages in flat areas",
+  "property.tellus.village_radius.tooltip": "Radius to check flatness for",
+  "property.tellus.village_height_range.tooltip": "Maximum height range for village placement area"
 }
