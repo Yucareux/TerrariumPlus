@@ -1,19 +1,19 @@
 package com.yucareux.tellus.world.data.source;
 
-import com.google.gson.Gson;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.net.HttpURLConnection;
-import java.net.URL;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import net.minecraft.util.Mth;
 
 public final class OpenMeteoClient {
-	private static final Gson GSON = new Gson();
 	private static final int CONNECT_TIMEOUT_MS = 5000;
 	private static final int READ_TIMEOUT_MS = 12000;
 	private static final int HISTORY_HOURS = 72;
@@ -24,7 +24,7 @@ public final class OpenMeteoClient {
 
 	public WeatherPointData fetch(double latitude, double longitude) throws IOException {
 		String url = buildUrl(latitude, longitude);
-		HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+		HttpURLConnection connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
 		connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
 		connection.setReadTimeout(READ_TIMEOUT_MS);
 		connection.setRequestProperty("User-Agent", USER_AGENT);
@@ -34,10 +34,11 @@ public final class OpenMeteoClient {
 			throw new IOException("Open-Meteo request failed with HTTP " + responseCode);
 		}
 		try (Reader reader = new InputStreamReader(new BufferedInputStream(connection.getInputStream()), StandardCharsets.UTF_8)) {
-			JsonObject root = GSON.fromJson(reader, JsonObject.class);
-			if (root == null) {
+			JsonElement rootElement = JsonParser.parseReader(reader);
+			if (rootElement.isJsonNull() || !rootElement.isJsonObject()) {
 				throw new IOException("Open-Meteo response missing JSON");
 			}
+			JsonObject root = rootElement.getAsJsonObject();
 			int utcOffset = root.get("utc_offset_seconds").getAsInt();
 			JsonObject current = root.getAsJsonObject("current");
 			int weatherCode = current.get("weather_code").getAsInt();

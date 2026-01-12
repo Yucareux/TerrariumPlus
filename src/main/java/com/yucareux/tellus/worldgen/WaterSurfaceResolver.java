@@ -62,6 +62,7 @@ public final class WaterSurfaceResolver {
 	private final EarthGeneratorSettings settings;
 	private final int seaLevel;
 	private final Cache<Long, WaterRegionData> regionCache;
+	private final ThreadLocal<RegionLookup> regionLookup = ThreadLocal.withInitial(RegionLookup::new);
 	private final long regionSalt;
 	private final int riverLakeBlendDistance;
 	private final int oceanBlendDistance;
@@ -110,11 +111,17 @@ public final class WaterSurfaceResolver {
 	}
 
 	public WaterChunkData resolveChunkWaterData(int chunkX, int chunkZ) {
+		int regionX = regionCoord(chunkX << 4);
+		int regionZ = regionCoord(chunkZ << 4);
+		WaterRegionData cached = getRegionIfPresent(regionX, regionZ);
+		if (cached != null) {
+			return new WaterChunkData(chunkX, chunkZ, cached);
+		}
 		int padding = Math.max(this.riverLakeBlendDistance, this.oceanBlendDistance);
 		if (!hasWaterNearChunk(chunkX, chunkZ, padding)) {
 			return buildDryChunkData(chunkX, chunkZ);
 		}
-		WaterRegionData region = resolveRegionData(regionCoord(chunkX << 4), regionCoord(chunkZ << 4));
+		WaterRegionData region = resolveRegionData(regionX, regionZ);
 		return new WaterChunkData(chunkX, chunkZ, region);
 	}
 
@@ -153,17 +160,32 @@ public final class WaterSurfaceResolver {
 	}
 
 	public WaterColumnData resolveColumnData(int blockX, int blockZ, int coverClass) {
+		int regionX = regionCoord(blockX);
+		int regionZ = regionCoord(blockZ);
 		if (!isWaterClass(coverClass)) {
-			int surface = sampleSurfaceHeight(blockX, blockZ);
+			WaterRegionData cached = getRegionIfPresent(regionX, regionZ);
+			if (cached != null) {
+				int surface = cached.rawSurface(blockX, blockZ);
+				return new WaterColumnData(false, false, surface, surface);
+			}
+			TellusLandMaskSource.LandMaskSample landMaskSample =
+					this.landMaskSource.sampleLandMask(blockX, blockZ, this.settings.worldScale());
+			int surface = sampleSurfaceHeight(blockX, blockZ, coverClass, landMaskSample);
 			return new WaterColumnData(false, false, surface, surface);
 		}
+		WaterRegionData cached = getRegionIfPresent(regionX, regionZ);
+		if (cached != null) {
+			return cached.columnData(blockX, blockZ);
+		}
 		if (coverClass == ESA_NO_DATA) {
-			int surface = sampleSurfaceHeight(blockX, blockZ);
+			TellusLandMaskSource.LandMaskSample landMaskSample =
+					this.landMaskSource.sampleLandMask(blockX, blockZ, this.settings.worldScale());
+			int surface = sampleSurfaceHeight(blockX, blockZ, coverClass, landMaskSample);
 			if (surface > this.seaLevel) {
 				return new WaterColumnData(false, false, surface, surface);
 			}
 		}
-		WaterRegionData region = resolveRegionData(regionCoord(blockX), regionCoord(blockZ));
+		WaterRegionData region = resolveRegionData(regionX, regionZ);
 		return region.columnData(blockX, blockZ);
 	}
 
@@ -206,13 +228,34 @@ public final class WaterSurfaceResolver {
 		}
 	}
 
+	private WaterRegionData getRegionIfPresent(int regionX, int regionZ) {
+		RegionLookup lookup = this.regionLookup.get();
+		if (lookup.matches(regionX, regionZ)) {
+			return lookup.region();
+		}
+		long key = pack(regionX, regionZ) ^ this.regionSalt;
+		WaterRegionData region = this.regionCache.getIfPresent(key);
+		if (region != null) {
+			lookup.update(regionX, regionZ, region);
+		}
+		return region;
+	}
+
 	private WaterRegionData resolveRegionData(int regionX, int regionZ) {
+		RegionLookup lookup = this.regionLookup.get();
+		if (lookup.matches(regionX, regionZ)) {
+			return lookup.region();
+		}
 		long key = pack(regionX, regionZ) ^ this.regionSalt;
 		try {
-			return this.regionCache.get(key, () -> buildRegionData(regionX, regionZ));
+			WaterRegionData region = this.regionCache.get(key, () -> buildRegionData(regionX, regionZ));
+			lookup.update(regionX, regionZ, region);
+			return region;
 		} catch (Exception e) {
 			Tellus.LOGGER.warn("Failed to build water region {}:{}", regionX, regionZ, e);
-			return buildRegionData(regionX, regionZ);
+			WaterRegionData region = buildRegionData(regionX, regionZ);
+			lookup.update(regionX, regionZ, region);
+			return region;
 		}
 	}
 
@@ -221,14 +264,17 @@ public final class WaterSurfaceResolver {
 		int minZ = (chunkZ << 4) - padding;
 		int maxX = (chunkX << 4) + 15 + padding;
 		int maxZ = (chunkZ << 4) + 15 + padding;
+		double worldScale = this.settings.worldScale();
 		for (int z = minZ; z <= maxZ; z++) {
 			for (int x = minX; x <= maxX; x++) {
-				int coverClass = this.landCoverSource.sampleCoverClass(x, z, this.settings.worldScale());
+				int coverClass = this.landCoverSource.sampleCoverClass(x, z, worldScale);
 				if (coverClass == ESA_WATER) {
 					return true;
 				}
 				if (coverClass == ESA_NO_DATA) {
-					int surface = sampleSurfaceHeight(x, z);
+					TellusLandMaskSource.LandMaskSample landMaskSample =
+							this.landMaskSource.sampleLandMask(x, z, worldScale);
+					int surface = sampleSurfaceHeight(x, z, coverClass, landMaskSample);
 					if (surface <= this.seaLevel) {
 						return true;
 					}
@@ -294,10 +340,10 @@ public final class WaterSurfaceResolver {
 			for (int dx = 0; dx < gridSize; dx++) {
 				int worldX = gridMinX + dx;
 				int coverClass = this.landCoverSource.sampleCoverClass(worldX, worldZ, worldScale);
-				int surface = sampleSurfaceHeight(worldX, worldZ);
-				boolean isNoData = coverClass == ESA_NO_DATA;
 				TellusLandMaskSource.LandMaskSample landMaskSample =
 						this.landMaskSource.sampleLandMask(worldX, worldZ, worldScale);
+				int surface = sampleSurfaceHeight(worldX, worldZ, coverClass, landMaskSample);
+				boolean isNoData = coverClass == ESA_NO_DATA;
 				boolean maskKnown = landMaskSample.known();
 				boolean landMaskIsLand = maskKnown && landMaskSample.land();
 				boolean oceanMask;
@@ -406,9 +452,6 @@ public final class WaterSurfaceResolver {
 
 		for (int i = 0; i < componentCount; i++) {
 			ComponentData component = components[i];
-			int spillHeight = component.borderHeights.isEmpty()
-					? component.averageHeight()
-					: percentile(component.borderHeights, BORDER_HEIGHT_PERCENTILE);
 			boolean belowSea = component.cellCount > 0
 					&& component.belowSeaCellCount / (double) component.cellCount >= BELOW_SEA_CELL_RATIO;
 			boolean inlandConnectedComponent = belowSea && componentTouchesInlandConnected(
@@ -423,11 +466,19 @@ public final class WaterSurfaceResolver {
 			boolean isOcean = (!landMaskInland && component.touchesNoData)
 					|| (!landMaskInland && belowSea && !inlandConnectedComponent);
 			component.isOcean = isOcean;
-			int componentSurface = isOcean ? this.seaLevel : spillHeight;
+			int componentSurface;
+			if (isOcean) {
+				componentSurface = this.seaLevel;
+			} else {
+				int spillHeight = component.borderHeights.isEmpty()
+						? component.averageHeight()
+						: percentile(component.borderHeights, BORDER_HEIGHT_PERCENTILE);
+				componentSurface = spillHeight;
+			}
 			fillComponentSurface(component, waterSurface, componentSurface);
 
 			if (isOcean) {
-			continue;
+				continue;
 			}
 
 			int width = component.maxX - component.minX + 1;
@@ -492,6 +543,7 @@ public final class WaterSurfaceResolver {
 			int x = index % gridSize;
 			int z = index / gridSize;
 			int waterSurfaceY = waterSurface[index];
+			int waterTerrainY = surfaceHeights[index];
 			for (int i = 0; i < NEIGHBOR_OFFSETS.length; i += 2) {
 				int nx = x + NEIGHBOR_OFFSETS[i];
 				int nz = z + NEIGHBOR_OFFSETS[i + 1];
@@ -504,8 +556,10 @@ public final class WaterSurfaceResolver {
 				}
 				int landHeight = surfaceHeights[neighbor];
 				if (landHeight - waterSurfaceY >= this.cliffSlopeThreshold) {
-					cliffLandMask[neighbor] = true;
 					cliffWaterMask[index] = true;
+				}
+				if (landHeight - waterTerrainY >= this.cliffSlopeThreshold) {
+					cliffLandMask[neighbor] = true;
 				}
 			}
 		}
@@ -618,6 +672,7 @@ public final class WaterSurfaceResolver {
 
 		int[] regionTerrain = new int[REGION_SIZE * REGION_SIZE];
 		int[] regionWater = new int[REGION_SIZE * REGION_SIZE];
+		int[] regionRaw = new int[REGION_SIZE * REGION_SIZE];
 		byte[] regionFlags = new byte[REGION_SIZE * REGION_SIZE];
 
 		for (int dz = 0; dz < REGION_SIZE; dz++) {
@@ -635,6 +690,7 @@ public final class WaterSurfaceResolver {
 				byte flag = waterFlags[gridIndex];
 				regionFlags[regionIndex] = flag;
 				regionWater[regionIndex] = flag == WATER_NONE ? terrain : waterSurface[gridIndex];
+				regionRaw[regionIndex] = surfaceHeights[gridIndex];
 			}
 		}
 
@@ -651,7 +707,7 @@ public final class WaterSurfaceResolver {
 		}
 
 		clearComponents(components, componentCount);
-		return new WaterRegionData(regionMinX, regionMinZ, regionTerrain, regionWater, regionFlags);
+		return new WaterRegionData(regionMinX, regionMinZ, regionTerrain, regionWater, regionFlags, regionRaw);
 	}
 
 	private WaterRegionData buildDryRegionData(
@@ -667,6 +723,7 @@ public final class WaterSurfaceResolver {
 	) {
 		int[] regionTerrain = new int[REGION_SIZE * REGION_SIZE];
 		int[] regionWater = new int[REGION_SIZE * REGION_SIZE];
+		int[] regionRaw = new int[REGION_SIZE * REGION_SIZE];
 		byte[] regionFlags = new byte[REGION_SIZE * REGION_SIZE];
 
 		for (int dz = 0; dz < REGION_SIZE; dz++) {
@@ -682,6 +739,7 @@ public final class WaterSurfaceResolver {
 				int terrain = surfaceHeights[gridIndex];
 				regionTerrain[regionIndex] = terrain;
 				regionWater[regionIndex] = terrain;
+				regionRaw[regionIndex] = terrain;
 				regionFlags[regionIndex] = WATER_NONE;
 			}
 		}
@@ -698,7 +756,7 @@ public final class WaterSurfaceResolver {
 			);
 		}
 
-		return new WaterRegionData(regionMinX, regionMinZ, regionTerrain, regionWater, regionFlags);
+		return new WaterRegionData(regionMinX, regionMinZ, regionTerrain, regionWater, regionFlags, regionRaw);
 	}
 
 	private ComponentData buildComponent(
@@ -1280,6 +1338,15 @@ public final class WaterSurfaceResolver {
 
 	private int sampleSurfaceHeight(double blockX, double blockZ) {
 		boolean oceanZoom = useOceanZoom(blockX, blockZ);
+		return sampleSurfaceHeight(blockX, blockZ, oceanZoom);
+	}
+
+	private int sampleSurfaceHeight(double blockX, double blockZ, int coverClass, TellusLandMaskSource.LandMaskSample landMaskSample) {
+		boolean oceanZoom = useOceanZoom(landMaskSample, coverClass);
+		return sampleSurfaceHeight(blockX, blockZ, oceanZoom);
+	}
+
+	private int sampleSurfaceHeight(double blockX, double blockZ, boolean oceanZoom) {
 		double elevation = this.elevationSource.sampleElevationMeters(blockX, blockZ, this.settings.worldScale(), oceanZoom);
 		double heightScale = elevation >= 0.0 ? this.settings.terrestrialHeightScale() : this.settings.oceanicHeightScale();
 		double scaled = elevation * heightScale / this.settings.worldScale();
@@ -1291,14 +1358,18 @@ public final class WaterSurfaceResolver {
 	private boolean useOceanZoom(double blockX, double blockZ) {
 		TellusLandMaskSource.LandMaskSample landSample =
 				this.landMaskSource.sampleLandMask(blockX, blockZ, this.settings.worldScale());
+		int coverClass = this.landCoverSource.sampleCoverClass(blockX, blockZ, this.settings.worldScale());
+		return useOceanZoom(landSample, coverClass);
+	}
+
+	private boolean useOceanZoom(TellusLandMaskSource.LandMaskSample landSample, int coverClass) {
 		if (!landSample.known()) {
 			return true;
 		}
 		if (landSample.land()) {
 			return false;
 		}
-		int coverClass = this.landCoverSource.sampleCoverClass(blockX, blockZ, this.settings.worldScale());
-		return coverClass == ESA_NO_DATA;
+		return coverClass == ESA_NO_DATA || coverClass == ESA_WATER;
 	}
 
 	private int metersToBlocks(double meters) {
@@ -1312,18 +1383,18 @@ public final class WaterSurfaceResolver {
 	}
 
 	private static int percentile(IntArrayList values, double percentile) {
-		int[] data = values.toIntArray();
-		if (data.length == 0) {
+		int size = values.size();
+		if (size == 0) {
 			return 0;
 		}
-		int index = (int) Math.floor(percentile * (data.length - 1));
-		index = Mth.clamp(index, 0, data.length - 1);
-		return selectNth(data, index);
+		int index = (int) Math.floor(percentile * (size - 1));
+		index = Mth.clamp(index, 0, size - 1);
+		return selectNth(values.elements(), size, index);
 	}
 
-	private static int selectNth(int[] data, int index) {
+	private static int selectNth(int[] data, int length, int index) {
 		int left = 0;
-		int right = data.length - 1;
+		int right = length - 1;
 		while (left < right) {
 			int pivotIndex = left + ((right - left) >>> 1);
 			pivotIndex = partition(data, left, right, pivotIndex);
@@ -1450,6 +1521,26 @@ public final class WaterSurfaceResolver {
 		}
 	}
 
+	private static final class RegionLookup {
+		private int regionX = Integer.MIN_VALUE;
+		private int regionZ = Integer.MIN_VALUE;
+		private WaterRegionData region;
+
+		private boolean matches(int regionX, int regionZ) {
+			return this.region != null && this.regionX == regionX && this.regionZ == regionZ;
+		}
+
+		private WaterRegionData region() {
+			return this.region;
+		}
+
+		private void update(int regionX, int regionZ, WaterRegionData region) {
+			this.regionX = regionX;
+			this.regionZ = regionZ;
+			this.region = region;
+		}
+	}
+
 	private static int regionCoord(int blockCoord) {
 		return Math.floorDiv(blockCoord, REGION_SIZE);
 	}
@@ -1519,13 +1610,22 @@ public final class WaterSurfaceResolver {
 		private final int[] terrainSurface;
 		private final int[] waterSurface;
 		private final byte[] waterFlags;
+		private final int[] rawSurface;
 
-		private WaterRegionData(int minX, int minZ, int[] terrainSurface, int[] waterSurface, byte[] waterFlags) {
+		private WaterRegionData(
+				int minX,
+				int minZ,
+				int[] terrainSurface,
+				int[] waterSurface,
+				byte[] waterFlags,
+				int[] rawSurface
+		) {
 			this.minX = minX;
 			this.minZ = minZ;
 			this.terrainSurface = terrainSurface;
 			this.waterSurface = waterSurface;
 			this.waterFlags = waterFlags;
+			this.rawSurface = rawSurface;
 		}
 
 		private WaterColumnData columnData(int blockX, int blockZ) {
@@ -1540,6 +1640,10 @@ public final class WaterSurfaceResolver {
 
 		private int waterSurface(int blockX, int blockZ) {
 			return this.waterSurface[index(blockX, blockZ)];
+		}
+
+		private int rawSurface(int blockX, int blockZ) {
+			return this.rawSurface[index(blockX, blockZ)];
 		}
 
 		private byte waterFlag(int blockX, int blockZ) {

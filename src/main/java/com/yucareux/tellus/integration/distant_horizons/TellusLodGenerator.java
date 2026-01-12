@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
 import net.minecraft.core.Holder;
@@ -66,6 +67,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 	private static final int LOD_DETAILED_WATER_STRIDE_DETAIL = 5;
 	private static final int LOD_COVER_DOWNSAMPLE_START_DETAIL = 7;
 	private static final int LOD_DOWNSAMPLE_MAX_STRIDE = 4;
+	private static final Map<Holder<Biome>, CanopyProfile> CANOPY_PROFILES = new ConcurrentHashMap<>();
 	private final IDhApiLevelWrapper levelWrapper;
 	private final EarthChunkGenerator generator;
 	private final EarthBiomeSource biomeSource;
@@ -124,17 +126,26 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		final int blendCells = baseDetailedWater && maxBlendBlocks > 0
 				? (maxBlendBlocks + cellSize - 1) / cellSize
 				: 0;
+		final TellusRealtimeState.PrecipitationMode precipitationMode = TellusRealtimeState.precipitationMode();
+		final boolean snowActive = (TellusRealtimeState.isWeatherEnabled()
+				&& precipitationMode == TellusRealtimeState.PrecipitationMode.SNOW)
+				|| TellusRealtimeState.isHistoricalSnowEnabled();
 
 		final int baseX = SectionPos.sectionToBlockCoord(chunkPosMinX);
 		final int baseZ = SectionPos.sectionToBlockCoord(chunkPosMinZ);
+		final int[] worldXs = new int[lodSizePoints];
+		final int[] worldZs = new int[lodSizePoints];
+		for (int i = 0; i < lodSizePoints; i++) {
+			worldXs[i] = baseX + i * cellSize + cellOffset;
+			worldZs[i] = baseZ + i * cellSize + cellOffset;
+		}
 
 		final int minY = levelWrapper.getMinHeight();
 		final int maxY = minY + levelWrapper.getMaxHeight();
 		final int absoluteTop = maxY - minY;
 		final WrapperCache wrappers = wrapperCache.get();
 		final IDhApiBlockStateWrapper waterBlock = wrappers.getBlockState(Blocks.WATER.defaultBlockState());
-		final List<DhApiTerrainDataPoint> columnDataPoints = new ArrayList<>();
-		final Map<SurfaceWrapperKey, SurfaceWrapperPair> surfaceWrapperCache = new HashMap<>();
+		final List<DhApiTerrainDataPoint> columnDataPoints = new ArrayList<>(8);
 		final int coverStride = coverSampleStride(detailLevel, lodSizePoints);
 		final int detailedWaterStride = detailedWaterStride(detailLevel, lodSizePoints);
 		final boolean allowWaterVegetation = detailLevel <= WATER_VEG_MAX_DETAIL;
@@ -149,25 +160,28 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		final IDhApiBiomeWrapper[] biomeWrappers = new IDhApiBiomeWrapper[area];
 		@SuppressWarnings("unchecked")
 		final Holder<Biome>[] biomeHolders = (Holder<Biome>[]) new Holder[area];
+		BlockState lastTopState = null;
+		BlockState lastFillerState = null;
+		SurfaceWrapperPair lastSurfaceWrapper = null;
 		boolean hasWaterInTile = false;
 
 		for (int baseLocalZ = 0; baseLocalZ < lodSizePoints; baseLocalZ += coverStride) {
 			for (int baseLocalX = 0; baseLocalX < lodSizePoints; baseLocalX += coverStride) {
-				final int sampleWorldX = baseX + baseLocalX * cellSize + cellOffset;
-				final int sampleWorldZ = baseZ + baseLocalZ * cellSize + cellOffset;
+				final int sampleWorldX = worldXs[baseLocalX];
+				final int sampleWorldZ = worldZs[baseLocalZ];
 				final int coverClass = generator.sampleCoverClass(sampleWorldX, sampleWorldZ);
 				for (int dz = 0; dz < coverStride; dz++) {
 					final int localZ = baseLocalZ + dz;
 					if (localZ >= lodSizePoints) {
 						continue;
 					}
-					final int worldZ = baseZ + localZ * cellSize + cellOffset;
+					final int worldZ = worldZs[localZ];
 					for (int dx = 0; dx < coverStride; dx++) {
 						final int localX = baseLocalX + dx;
 						if (localX >= lodSizePoints) {
 							continue;
 						}
-						final int worldX = baseX + localX * cellSize + cellOffset;
+						final int worldX = worldXs[localX];
 						final int index = localZ * lodSizePoints + localX;
 						final WaterSurfaceResolver.WaterColumnData fastColumn =
 								generator.resolveLodWaterColumn(worldX, worldZ, coverClass);
@@ -201,9 +215,9 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		if (useDetailedWater) {
 			if (detailedWaterStride <= 1) {
 				for (int localZ = 0; localZ < lodSizePoints; localZ++) {
-					final int worldZ = baseZ + localZ * cellSize + cellOffset;
+					final int worldZ = worldZs[localZ];
 					for (int localX = 0; localX < lodSizePoints; localX++) {
-						final int worldX = baseX + localX * cellSize + cellOffset;
+						final int worldX = worldXs[localX];
 						final int index = localZ * lodSizePoints + localX;
 						final int coverClass = coverClasses[index];
 						if (!isWaterCoverClass(coverClass)) {
@@ -248,8 +262,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 						if (sampleLocalX < 0) {
 							continue;
 						}
-						final int sampleWorldX = baseX + sampleLocalX * cellSize + cellOffset;
-						final int sampleWorldZ = baseZ + sampleLocalZ * cellSize + cellOffset;
+						final int sampleWorldX = worldXs[sampleLocalX];
+						final int sampleWorldZ = worldZs[sampleLocalZ];
 						final int sampleIndex = sampleLocalZ * lodSizePoints + sampleLocalX;
 						final int sampleCover = coverClasses[sampleIndex];
 						final WaterSurfaceResolver.WaterColumnData detailedColumn =
@@ -285,9 +299,9 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		}
 
 		for (int localZ = 0; localZ < lodSizePoints; localZ++) {
-			final int worldZ = baseZ + localZ * cellSize + cellOffset;
+			final int worldZ = worldZs[localZ];
 			for (int localX = 0; localX < lodSizePoints; localX++) {
-				final int worldX = baseX + localX * cellSize + cellOffset;
+				final int worldX = worldXs[localX];
 				final int index = localZ * lodSizePoints + localX;
 				final int surfaceY = surfaceYs[index];
 				final int vegetationSurfaceY = vegetationSurfaceYs[index];
@@ -296,19 +310,27 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 				final int coverClass = coverClasses[index];
 				final Holder<Biome> biomeHolder = biomeHolders[index];
 				final IDhApiBiomeWrapper biome = biomeWrappers[index];
-				final boolean isMangrove = isMangroveBiome(biomeHolder) || coverClass == ESA_MANGROVES;
+				final CanopyProfile canopyProfile = canopyProfile(biomeHolder);
+				final boolean isMangrove = canopyProfile.isMangrove() || coverClass == ESA_MANGROVES;
 				final EarthChunkGenerator.LodSurface lodSurface =
 						generator.resolveLodSurface(biomeHolder, worldX, worldZ, surfaceY, underwater, coverClass);
-				final SurfaceWrapperPair surfaceWrapper = surfaceWrapperCache.computeIfAbsent(
-						new SurfaceWrapperKey(lodSurface.top(), lodSurface.filler()),
-						key -> new SurfaceWrapperPair(
-								wrappers.getBlockState(key.top()),
-								wrappers.getBlockState(key.filler())
-						)
-				);
+				final BlockState topState = lodSurface.top();
+				final BlockState fillerState = lodSurface.filler();
+				final SurfaceWrapperPair surfaceWrapper;
+				if (topState == lastTopState && fillerState == lastFillerState && lastSurfaceWrapper != null) {
+					surfaceWrapper = lastSurfaceWrapper;
+				} else {
+					surfaceWrapper = new SurfaceWrapperPair(
+							wrappers.getBlockState(topState),
+							wrappers.getBlockState(fillerState)
+					);
+					lastTopState = topState;
+					lastFillerState = fillerState;
+					lastSurfaceWrapper = surfaceWrapper;
+				}
 				final IDhApiBlockStateWrapper fillerBlock = surfaceWrapper.filler();
 				IDhApiBlockStateWrapper topBlock = surfaceWrapper.top();
-				if (!underwater && TellusRealtimeState.shouldApplySnow(worldX, worldZ)) {
+				if (!underwater && snowActive && TellusRealtimeState.shouldApplySnow(worldX, worldZ)) {
 					topBlock = wrappers.getBlockState(Blocks.SNOW_BLOCK.defaultBlockState());
 				}
 				final int slopeDiff = lodSlopeDiff(surfaceYs, lodSizePoints, localX, localZ, cellSize);
@@ -355,7 +377,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 
 				final boolean allowCanopy = (coverClass == ESA_TREE_COVER && !underwater) || isMangrove;
 				final CanopyColumn canopyColumn = allowCanopy
-						? resolveCanopyColumn(biomeHolder, worldX, worldZ, cellSize)
+						? resolveCanopyColumn(canopyProfile, worldX, worldZ, cellSize)
 						: null;
 				final boolean deferMangroveCanopy = isMangrove && underwater;
 				if (!deferMangroveCanopy) {
@@ -374,7 +396,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 					if (waterTop > lastLayerTop) {
 						final int waterDepth = waterSurface - vegetationSurfaceY;
 						final WaterVegetationColumn vegetation = allowWaterVegetation
-								? resolveWaterVegetationColumn(biomeHolder, worldX, worldZ, waterDepth)
+								? resolveWaterVegetationColumn(canopyProfile, worldX, worldZ, waterDepth)
 								: null;
 						if (vegetation != null) {
 							int vegetationBaseTop = toLayerTop(vegetationSurfaceY, minY, absoluteTop);
@@ -503,15 +525,15 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 	) {
 		final int min = -blendCells;
 		final int max = lodSizePoints - 1 + blendCells;
-		for (int localZ = min; localZ <= max; localZ++) {
+		int worldZ = baseZ + min * cellSize + cellOffset;
+		for (int localZ = min; localZ <= max; localZ++, worldZ += cellSize) {
 			final boolean zInside = localZ >= 0 && localZ < lodSizePoints;
-			final int worldZ = baseZ + localZ * cellSize + cellOffset;
-			for (int localX = min; localX <= max; localX++) {
+			int worldX = baseX + min * cellSize + cellOffset;
+			for (int localX = min; localX <= max; localX++, worldX += cellSize) {
 				final boolean xInside = localX >= 0 && localX < lodSizePoints;
 				if (!includeInterior && xInside && zInside) {
 					continue;
 				}
-				final int worldX = baseX + localX * cellSize + cellOffset;
 				final int coverClass = generator.sampleCoverClass(worldX, worldZ);
 				if (coverClass == ESA_WATER || coverClass == ESA_MANGROVES) {
 					return true;
@@ -567,19 +589,170 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		return (int) Math.round(min + (max - min) * t);
 	}
 
+	private static CanopyProfile canopyProfile(final Holder<Biome> biome) {
+		return CANOPY_PROFILES.computeIfAbsent(biome, TellusLodGenerator::buildCanopyProfile);
+	}
+
+	private static CanopyProfile buildCanopyProfile(final Holder<Biome> biome) {
+		final boolean isMangrove = biome.is(Biomes.MANGROVE_SWAMP);
+		final boolean isDarkForest = biome.is(Biomes.DARK_FOREST);
+		final boolean isBambooJungle = biome.is(Biomes.BAMBOO_JUNGLE);
+		final boolean isSparseJungle = biome.is(Biomes.SPARSE_JUNGLE);
+		final boolean isWindsweptForest = biome.is(Biomes.WINDSWEPT_FOREST);
+		final boolean isWoodedBadlands = biome.is(Biomes.WOODED_BADLANDS);
+		final boolean isWindsweptSavanna = biome.is(Biomes.WINDSWEPT_SAVANNA);
+		final boolean isSavannaPlateau = biome.is(Biomes.SAVANNA_PLATEAU);
+		final boolean isCherryGrove = biome.is(Biomes.CHERRY_GROVE);
+		final boolean isSwamp = biome.is(Biomes.SWAMP);
+		final boolean isWarmOcean = biome.is(Biomes.WARM_OCEAN);
+		final boolean isLukewarmOcean = biome.is(Biomes.LUKEWARM_OCEAN);
+		final boolean isDeepLukewarmOcean = biome.is(Biomes.DEEP_LUKEWARM_OCEAN);
+		final boolean isJungle = biome.is(BiomeTags.IS_JUNGLE);
+		final boolean isForest = biome.is(BiomeTags.IS_FOREST);
+		final boolean isTaiga = biome.is(BiomeTags.IS_TAIGA);
+		final boolean isSavanna = biome.is(BiomeTags.IS_SAVANNA);
+		final boolean isOcean = biome.is(BiomeTags.IS_OCEAN);
+		final boolean isRiver = biome.is(BiomeTags.IS_RIVER);
+
+		final int canopyBaseChance;
+		if (isMangrove) {
+			canopyBaseChance = 85;
+		} else if (isDarkForest) {
+			canopyBaseChance = 80;
+		} else if (isBambooJungle) {
+			canopyBaseChance = 75;
+		} else if (isSparseJungle) {
+			canopyBaseChance = 50;
+		} else if (isWindsweptForest) {
+			canopyBaseChance = 45;
+		} else if (isWoodedBadlands) {
+			canopyBaseChance = 40;
+		} else if (isWindsweptSavanna) {
+			canopyBaseChance = 35;
+		} else if (isSavannaPlateau) {
+			canopyBaseChance = 45;
+		} else if (isJungle) {
+			canopyBaseChance = 75;
+		} else if (isForest) {
+			canopyBaseChance = 70;
+		} else if (isTaiga) {
+			canopyBaseChance = 65;
+		} else if (isCherryGrove) {
+			canopyBaseChance = 60;
+		} else if (isSwamp) {
+			canopyBaseChance = 55;
+		} else if (isSavanna) {
+			canopyBaseChance = 50;
+		} else {
+			canopyBaseChance = 0;
+		}
+
+		final int canopyBaseRadius;
+		if (isMangrove) {
+			canopyBaseRadius = 5;
+		} else if (isSparseJungle) {
+			canopyBaseRadius = 3;
+		} else if (isBambooJungle) {
+			canopyBaseRadius = 4;
+		} else if (isJungle) {
+			canopyBaseRadius = 5;
+		} else if (isDarkForest) {
+			canopyBaseRadius = 4;
+		} else if (isWindsweptForest || isWoodedBadlands) {
+			canopyBaseRadius = 2;
+		} else if (isWindsweptSavanna || isSavannaPlateau) {
+			canopyBaseRadius = 2;
+		} else if (isForest || isTaiga || isCherryGrove || isSwamp) {
+			canopyBaseRadius = 3;
+		} else if (isSavanna) {
+			canopyBaseRadius = 2;
+		} else {
+			canopyBaseRadius = 0;
+		}
+
+		final boolean isTallCanopy = isMangrove || isDarkForest || isJungle;
+		final int canopyBaseHeight;
+		if (isMangrove) {
+			canopyBaseHeight = 4;
+		} else if (isJungle) {
+			canopyBaseHeight = 4;
+		} else if (isTallCanopy) {
+			canopyBaseHeight = 3;
+		} else if (isTaiga) {
+			canopyBaseHeight = 3;
+		} else {
+			canopyBaseHeight = 2;
+		}
+
+		final int canopyMaxHeight;
+		if (isMangrove) {
+			canopyMaxHeight = 5;
+		} else if (isJungle) {
+			canopyMaxHeight = 5;
+		} else if (isTallCanopy || isTaiga) {
+			canopyMaxHeight = 4;
+		} else {
+			canopyMaxHeight = 3;
+		}
+
+		final int waterVegetationChance;
+		if (isWarmOcean || isLukewarmOcean) {
+			waterVegetationChance = 19;
+		} else if (isDeepLukewarmOcean) {
+			waterVegetationChance = 18;
+		} else if (isMangrove) {
+			waterVegetationChance = 17;
+		} else if (isSwamp) {
+			waterVegetationChance = 14;
+		} else if (isOcean) {
+			waterVegetationChance = 15;
+		} else if (isRiver) {
+			waterVegetationChance = 12;
+		} else {
+			waterVegetationChance = 10;
+		}
+
+		return new CanopyProfile(
+				isMangrove,
+				isDarkForest,
+				isBambooJungle,
+				isSparseJungle,
+				isWindsweptForest,
+				isWoodedBadlands,
+				isWindsweptSavanna,
+				isSavannaPlateau,
+				isCherryGrove,
+				isSwamp,
+				isJungle,
+				isForest,
+				isTaiga,
+				isSavanna,
+				isOcean,
+				isRiver,
+				isWarmOcean,
+				isLukewarmOcean,
+				isDeepLukewarmOcean,
+				canopyBaseChance,
+				canopyBaseRadius,
+				canopyBaseHeight,
+				canopyMaxHeight,
+				waterVegetationChance
+		);
+	}
+
 	private static CanopyColumn resolveCanopyColumn(
-			final Holder<Biome> biome,
+			final CanopyProfile profile,
 			final int worldX,
 			final int worldZ,
 			final int cellSize
 	) {
-		final int baseChance = canopyCenterChancePercent(biome);
+		final int baseChance = canopyCenterChancePercent(profile);
 		final int chance = boostCanopyChancePercent(baseChance);
 		if (chance <= 0) {
 			return null;
 		}
 
-		final int gridSize = canopyGridSize(biome, cellSize);
+		final int gridSize = canopyGridSize(cellSize);
 		final int cellX = Math.floorDiv(worldX, gridSize);
 		final int cellZ = Math.floorDiv(worldZ, gridSize);
 
@@ -602,7 +775,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 				final int centerX = testCellX * gridSize + offsetX;
 				final int centerZ = testCellZ * gridSize + offsetZ;
 				final int dist = Math.abs(worldX - centerX) + Math.abs(worldZ - centerZ);
-				final int radius = canopyRadius(biome, centerHash, gridSize);
+				final int radius = canopyRadius(profile, centerHash, gridSize);
 
 				if (dist <= radius && dist < bestDist) {
 					bestDist = dist;
@@ -617,7 +790,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 			return null;
 		}
 
-		int crownHeight = canopyBaseHeight(biome);
+		int crownHeight = profile.canopyBaseHeight();
 		final int falloff = bestRadius - bestDist;
 		if (falloff >= 2) {
 			crownHeight++;
@@ -625,7 +798,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		if (falloff >= 4) {
 			crownHeight++;
 		}
-		final int maxHeight = canopyMaxHeight(biome);
+		final int maxHeight = profile.canopyMaxHeight();
 		crownHeight += (bestHash >>> 19) & 1;
 		if (bestCenter) {
 			crownHeight++;
@@ -635,15 +808,15 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 			return null;
 		}
 
-		final int centerTrunkHeight = canopyTrunkHeight(biome, bestHash);
+		final int centerTrunkHeight = canopyTrunkHeight(profile, bestHash);
 		final int trunkHeight = bestCenter ? centerTrunkHeight : 0;
-		final int leafLift = canopyLeafLift(biome, bestCenter, centerTrunkHeight, bestDist, bestHash);
+		final int leafLift = canopyLeafLift(profile, bestCenter, centerTrunkHeight, bestDist, bestHash);
 
-		final BlockState leavesBlock = selectCanopyBlock(biome, worldX, worldZ);
+		final BlockState leavesBlock = selectCanopyBlock(profile, worldX, worldZ);
 		if (leavesBlock == null) {
 			return null;
 		}
-		final BlockState trunkBlock = trunkHeight > 0 ? selectTrunkBlock(biome, worldX, worldZ, bestHash) : null;
+		final BlockState trunkBlock = trunkHeight > 0 ? selectTrunkBlock(profile, worldX, worldZ, bestHash) : null;
 
 		return new CanopyColumn(trunkHeight, leafLift, crownHeight, leavesBlock, trunkBlock);
 	}
@@ -696,50 +869,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		return layerTop;
 	}
 
-	private static int canopyCenterChancePercent(final Holder<Biome> biome) {
-		if (biome.is(Biomes.MANGROVE_SWAMP)) {
-			return 85;
-		}
-		if (biome.is(Biomes.DARK_FOREST)) {
-			return 80;
-		}
-		if (biome.is(Biomes.BAMBOO_JUNGLE)) {
-			return 75;
-		}
-		if (biome.is(Biomes.SPARSE_JUNGLE)) {
-			return 50;
-		}
-		if (biome.is(Biomes.WINDSWEPT_FOREST)) {
-			return 45;
-		}
-		if (biome.is(Biomes.WOODED_BADLANDS)) {
-			return 40;
-		}
-		if (biome.is(Biomes.WINDSWEPT_SAVANNA)) {
-			return 35;
-		}
-		if (biome.is(Biomes.SAVANNA_PLATEAU)) {
-			return 45;
-		}
-		if (biome.is(BiomeTags.IS_JUNGLE)) {
-			return 75;
-		}
-		if (biome.is(BiomeTags.IS_FOREST)) {
-			return 70;
-		}
-		if (biome.is(BiomeTags.IS_TAIGA)) {
-			return 65;
-		}
-		if (biome.is(Biomes.CHERRY_GROVE)) {
-			return 60;
-		}
-		if (biome.is(Biomes.SWAMP)) {
-			return 55;
-		}
-		if (biome.is(BiomeTags.IS_SAVANNA)) {
-			return 50;
-		}
-		return 0;
+	private static int canopyCenterChancePercent(final CanopyProfile profile) {
+		return profile.canopyBaseChance();
 	}
 
 	private static int boostCanopyChancePercent(final int baseChance) {
@@ -747,7 +878,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		return Math.min(CANOPY_DENSITY_MAX, boosted);
 	}
 
-	private static int canopyGridSize(final Holder<Biome> biome, final int cellSize) {
+	private static int canopyGridSize(final int cellSize) {
 		final int detailLevel = Math.max(0, Integer.numberOfTrailingZeros(cellSize));
 		final int scale = Math.min(CANOPY_GRID_SCALE_MAX, Math.max(0, detailLevel - 2));
 		final int gridFromDetail = CANOPY_GRID_SIZE + (scale << 1);
@@ -756,30 +887,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		return Mth.clamp(Math.min(gridFromDetail, gridFromCell), 6, maxGrid);
 	}
 
-	private static int canopyRadius(final Holder<Biome> biome, final int centerHash, final int gridSize) {
-		int baseRadius;
-		if (biome.is(Biomes.MANGROVE_SWAMP)) {
-			baseRadius = 5;
-		} else if (biome.is(Biomes.SPARSE_JUNGLE)) {
-			baseRadius = 3;
-		} else if (biome.is(Biomes.BAMBOO_JUNGLE)) {
-			baseRadius = 4;
-		} else if (biome.is(BiomeTags.IS_JUNGLE)) {
-			baseRadius = 5;
-		} else if (biome.is(Biomes.DARK_FOREST)) {
-			baseRadius = 4;
-		} else if (biome.is(Biomes.WINDSWEPT_FOREST) || biome.is(Biomes.WOODED_BADLANDS)) {
-			baseRadius = 2;
-		} else if (biome.is(Biomes.WINDSWEPT_SAVANNA) || biome.is(Biomes.SAVANNA_PLATEAU)) {
-			baseRadius = 2;
-		} else if (biome.is(BiomeTags.IS_FOREST) || biome.is(BiomeTags.IS_TAIGA) || biome.is(Biomes.CHERRY_GROVE)
-				|| biome.is(Biomes.SWAMP)) {
-			baseRadius = 3;
-		} else if (biome.is(BiomeTags.IS_SAVANNA)) {
-			baseRadius = 2;
-		} else {
-			baseRadius = 0;
-		}
+	private static int canopyRadius(final CanopyProfile profile, final int centerHash, final int gridSize) {
+		final int baseRadius = profile.canopyBaseRadius();
 		if (baseRadius == 0) {
 			return 0;
 		}
@@ -788,50 +897,21 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		return scaledRadius + ((centerHash >>> 16) & 1);
 	}
 
-	private static int canopyBaseHeight(final Holder<Biome> biome) {
-		if (biome.is(Biomes.MANGROVE_SWAMP)) {
-			return 4;
-		}
-		if (isJungleBiome(biome)) {
-			return 4;
-		}
-		if (isTallCanopyBiome(biome)) {
-			return 3;
-		}
-		if (biome.is(BiomeTags.IS_TAIGA)) {
-			return 3;
-		}
-		return 2;
-	}
-
-	private static int canopyMaxHeight(final Holder<Biome> biome) {
-		if (biome.is(Biomes.MANGROVE_SWAMP)) {
-			return 5;
-		}
-		if (isJungleBiome(biome)) {
-			return 5;
-		}
-		if (isTallCanopyBiome(biome) || biome.is(BiomeTags.IS_TAIGA)) {
-			return 4;
-		}
-		return 3;
-	}
-
 	private static boolean hasCanopyCenter(final int centerHash, final int chancePercent) {
 		final int roll = (centerHash >>> 24) & 0xFF;
 		final int threshold = (chancePercent * 255) / 100;
 		return roll < threshold;
 	}
 
-	private static int canopyTrunkHeight(final Holder<Biome> biome, final int centerHash) {
+	private static int canopyTrunkHeight(final CanopyProfile profile, final int centerHash) {
 		int jitter = (centerHash >>> 21) & 0x3;
 		if (jitter == 3) {
 			jitter = 2;
 		}
-		if (biome.is(Biomes.MANGROVE_SWAMP)) {
+		if (profile.isMangrove()) {
 			return 6 + jitter + ((centerHash >>> 19) & 1);
 		}
-		if (isJungleBiome(biome)) {
+		if (profile.isJungle()) {
 			int height = 10 + jitter;
 			if (((centerHash >>> 18) & 0x7) == 0) {
 				height += 8;
@@ -839,14 +919,14 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 			return height;
 		}
 		int height = 3 + jitter;
-		if (isTallCanopyBiome(biome)) {
+		if (profile.isTallCanopy()) {
 			height = Math.min(5, height + 1);
 		}
 		return height;
 	}
 
 	private static int canopyLeafLift(
-			final Holder<Biome> biome,
+			final CanopyProfile profile,
 			final boolean isCenter,
 			final int centerTrunkHeight,
 			final int bestDist,
@@ -857,29 +937,15 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		}
 
 		final int baseLift = Math.max(1, centerTrunkHeight - Math.max(0, bestDist - 1));
-		int lift = isTallCanopyBiome(biome) ? Math.max(2, baseLift) : Math.max(1, baseLift);
+		int lift = profile.isTallCanopy() ? Math.max(2, baseLift) : Math.max(1, baseLift);
 		if (bestDist > 1 && ((centerHash >>> 20) & 1) == 0) {
 			lift = Math.max(1, lift - 1);
 		}
 		return lift;
 	}
 
-	private static boolean isTallCanopyBiome(final Holder<Biome> biome) {
-		return biome.is(Biomes.MANGROVE_SWAMP)
-				|| biome.is(Biomes.DARK_FOREST)
-				|| biome.is(BiomeTags.IS_JUNGLE);
-	}
-
-	private static boolean isMangroveBiome(final Holder<Biome> biome) {
-		return biome.is(Biomes.MANGROVE_SWAMP);
-	}
-
-	private static boolean isJungleBiome(final Holder<Biome> biome) {
-		return biome.is(BiomeTags.IS_JUNGLE);
-	}
-
 	private static WaterVegetationColumn resolveWaterVegetationColumn(
-			final Holder<Biome> biome,
+			final CanopyProfile profile,
 			final int worldX,
 			final int worldZ,
 			final int waterDepth
@@ -887,7 +953,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		if (waterDepth < WATER_VEG_MIN_DEPTH) {
 			return null;
 		}
-		final int chance = waterVegetationChancePercent(biome);
+		final int chance = waterVegetationChancePercent(profile);
 		if (chance <= 0) {
 			return null;
 		}
@@ -895,7 +961,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		if (!hasClusterCenter(hash, chance)) {
 			return null;
 		}
-		final boolean kelp = shouldUseKelp(biome, waterDepth, hash);
+		final boolean kelp = shouldUseKelp(profile, waterDepth, hash);
 		final BlockState blockState = kelp
 				? Blocks.KELP_PLANT.defaultBlockState()
 				: Blocks.SEAGRASS.defaultBlockState();
@@ -911,41 +977,23 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		return new WaterVegetationColumn(height, blockState);
 	}
 
-	private static int waterVegetationChancePercent(final Holder<Biome> biome) {
-		if (biome.is(Biomes.WARM_OCEAN) || biome.is(Biomes.LUKEWARM_OCEAN)) {
-			return 19;
-		}
-		if (biome.is(Biomes.DEEP_LUKEWARM_OCEAN)) {
-			return 18;
-		}
-		if (biome.is(Biomes.MANGROVE_SWAMP)) {
-			return 17;
-		}
-		if (biome.is(Biomes.SWAMP)) {
-			return 14;
-		}
-		if (biome.is(BiomeTags.IS_OCEAN)) {
-			return 15;
-		}
-		if (biome.is(BiomeTags.IS_RIVER)) {
-			return 12;
-		}
-		return 10;
+	private static int waterVegetationChancePercent(final CanopyProfile profile) {
+		return profile.waterVegetationChance();
 	}
 
-	private static boolean shouldUseKelp(final Holder<Biome> biome, final int waterDepth, final int centerHash) {
-		if (biome.is(BiomeTags.IS_RIVER)) {
+	private static boolean shouldUseKelp(final CanopyProfile profile, final int waterDepth, final int centerHash) {
+		if (profile.isRiver()) {
 			return false;
 		}
 		if (waterDepth < 6) {
 			return false;
 		}
 		final int chance;
-		if (biome.is(Biomes.WARM_OCEAN)) {
+		if (profile.isWarmOcean()) {
 			chance = 15;
-		} else if (biome.is(Biomes.LUKEWARM_OCEAN) || biome.is(Biomes.DEEP_LUKEWARM_OCEAN)) {
+		} else if (profile.isLukewarmOcean() || profile.isDeepLukewarmOcean()) {
 			chance = 25;
-		} else if (biome.is(BiomeTags.IS_OCEAN)) {
+		} else if (profile.isOcean()) {
 			chance = 35;
 		} else {
 			chance = 0;
@@ -959,41 +1007,41 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		return Math.floorMod(hash, gridSize);
 	}
 
-	private static BlockState selectCanopyBlock(final Holder<Biome> biome, final int worldX, final int worldZ) {
-		if (biome.is(Biomes.WINDSWEPT_FOREST)) {
+	private static BlockState selectCanopyBlock(final CanopyProfile profile, final int worldX, final int worldZ) {
+		if (profile.isWindsweptForest()) {
 			return Blocks.SPRUCE_LEAVES.defaultBlockState();
 		}
-		if (biome.is(Biomes.WOODED_BADLANDS)) {
+		if (profile.isWoodedBadlands()) {
 			return Blocks.OAK_LEAVES.defaultBlockState();
 		}
-		if (biome.is(Biomes.WINDSWEPT_SAVANNA) || biome.is(Biomes.SAVANNA_PLATEAU)) {
+		if (profile.isWindsweptSavanna() || profile.isSavannaPlateau()) {
 			return Blocks.ACACIA_LEAVES.defaultBlockState();
 		}
-		if (biome.is(Biomes.SPARSE_JUNGLE) || biome.is(Biomes.BAMBOO_JUNGLE)) {
+		if (profile.isSparseJungle() || profile.isBambooJungle()) {
 			return Blocks.JUNGLE_LEAVES.defaultBlockState();
 		}
-		if (biome.is(Biomes.MANGROVE_SWAMP)) {
+		if (profile.isMangrove()) {
 			return Blocks.MANGROVE_LEAVES.defaultBlockState();
 		}
-		if (biome.is(Biomes.DARK_FOREST)) {
+		if (profile.isDarkForest()) {
 			return Blocks.DARK_OAK_LEAVES.defaultBlockState();
 		}
-		if (biome.is(Biomes.CHERRY_GROVE)) {
+		if (profile.isCherryGrove()) {
 			return Blocks.CHERRY_LEAVES.defaultBlockState();
 		}
-		if (biome.is(BiomeTags.IS_JUNGLE)) {
+		if (profile.isJungle()) {
 			return Blocks.JUNGLE_LEAVES.defaultBlockState();
 		}
-		if (biome.is(BiomeTags.IS_TAIGA)) {
+		if (profile.isTaiga()) {
 			return Blocks.SPRUCE_LEAVES.defaultBlockState();
 		}
-		if (biome.is(BiomeTags.IS_SAVANNA)) {
+		if (profile.isSavanna()) {
 			return Blocks.ACACIA_LEAVES.defaultBlockState();
 		}
-		if (biome.is(Biomes.SWAMP)) {
+		if (profile.isSwamp()) {
 			return Blocks.OAK_LEAVES.defaultBlockState();
 		}
-		if (biome.is(BiomeTags.IS_FOREST)) {
+		if (profile.isForest()) {
 			final int hash = mixHash(worldX, worldZ, CANOPY_VARIANT_SALT);
 			return ((hash >>> 28) & 0x3) == 0
 					? Blocks.BIRCH_LEAVES.defaultBlockState()
@@ -1002,41 +1050,46 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		return null;
 	}
 
-	private static BlockState selectTrunkBlock(final Holder<Biome> biome, final int worldX, final int worldZ, final int centerHash) {
-		if (biome.is(Biomes.WINDSWEPT_FOREST)) {
+	private static BlockState selectTrunkBlock(
+			final CanopyProfile profile,
+			final int worldX,
+			final int worldZ,
+			final int centerHash
+	) {
+		if (profile.isWindsweptForest()) {
 			return Blocks.SPRUCE_LOG.defaultBlockState();
 		}
-		if (biome.is(Biomes.WOODED_BADLANDS)) {
+		if (profile.isWoodedBadlands()) {
 			return Blocks.OAK_LOG.defaultBlockState();
 		}
-		if (biome.is(Biomes.WINDSWEPT_SAVANNA) || biome.is(Biomes.SAVANNA_PLATEAU)) {
+		if (profile.isWindsweptSavanna() || profile.isSavannaPlateau()) {
 			return Blocks.ACACIA_LOG.defaultBlockState();
 		}
-		if (biome.is(Biomes.SPARSE_JUNGLE) || biome.is(Biomes.BAMBOO_JUNGLE)) {
+		if (profile.isSparseJungle() || profile.isBambooJungle()) {
 			return Blocks.JUNGLE_LOG.defaultBlockState();
 		}
-		if (biome.is(Biomes.MANGROVE_SWAMP)) {
+		if (profile.isMangrove()) {
 			return Blocks.MANGROVE_LOG.defaultBlockState();
 		}
-		if (biome.is(Biomes.DARK_FOREST)) {
+		if (profile.isDarkForest()) {
 			return Blocks.DARK_OAK_LOG.defaultBlockState();
 		}
-		if (biome.is(Biomes.CHERRY_GROVE)) {
+		if (profile.isCherryGrove()) {
 			return Blocks.CHERRY_LOG.defaultBlockState();
 		}
-		if (biome.is(BiomeTags.IS_JUNGLE)) {
+		if (profile.isJungle()) {
 			return Blocks.JUNGLE_LOG.defaultBlockState();
 		}
-		if (biome.is(BiomeTags.IS_TAIGA)) {
+		if (profile.isTaiga()) {
 			return Blocks.SPRUCE_LOG.defaultBlockState();
 		}
-		if (biome.is(BiomeTags.IS_SAVANNA)) {
+		if (profile.isSavanna()) {
 			return Blocks.ACACIA_LOG.defaultBlockState();
 		}
-		if (biome.is(Biomes.SWAMP)) {
+		if (profile.isSwamp()) {
 			return Blocks.OAK_LOG.defaultBlockState();
 		}
-		if (biome.is(BiomeTags.IS_FOREST)) {
+		if (profile.isForest()) {
 			final int hash = mixHash(worldX, worldZ, CANOPY_VARIANT_SALT) ^ centerHash;
 			return ((hash >>> 28) & 0x3) == 0
 					? Blocks.BIRCH_LOG.defaultBlockState()
@@ -1059,6 +1112,37 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		final int roll = (centerHash >>> 24) & 0xFF;
 		final int threshold = (chancePercent * 255) / 100;
 		return roll < threshold;
+	}
+
+	private record CanopyProfile(
+			boolean isMangrove,
+			boolean isDarkForest,
+			boolean isBambooJungle,
+			boolean isSparseJungle,
+			boolean isWindsweptForest,
+			boolean isWoodedBadlands,
+			boolean isWindsweptSavanna,
+			boolean isSavannaPlateau,
+			boolean isCherryGrove,
+			boolean isSwamp,
+			boolean isJungle,
+			boolean isForest,
+			boolean isTaiga,
+			boolean isSavanna,
+			boolean isOcean,
+			boolean isRiver,
+			boolean isWarmOcean,
+			boolean isLukewarmOcean,
+			boolean isDeepLukewarmOcean,
+			int canopyBaseChance,
+			int canopyBaseRadius,
+			int canopyBaseHeight,
+			int canopyMaxHeight,
+			int waterVegetationChance
+	) {
+		private boolean isTallCanopy() {
+			return isMangrove || isDarkForest || isJungle;
+		}
 	}
 
 	private static final class CanopyColumn {
@@ -1091,9 +1175,6 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 			this.height = height;
 			this.blockState = blockState;
 		}
-	}
-
-	private record SurfaceWrapperKey(BlockState top, BlockState filler) {
 	}
 
 	private record SurfaceWrapperPair(IDhApiBlockStateWrapper top, IDhApiBlockStateWrapper filler) {

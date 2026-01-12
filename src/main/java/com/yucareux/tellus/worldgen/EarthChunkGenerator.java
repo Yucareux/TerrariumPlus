@@ -123,6 +123,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 	private final int minY;
 	private final int height;
 	private final WaterSurfaceResolver waterResolver;
+	private final ThreadLocal<WaterChunkCache> waterChunkCache = ThreadLocal.withInitial(WaterChunkCache::new);
 	private volatile TellusGeologyGenerator geologyGenerator;
 	private volatile long geologySeed = Long.MIN_VALUE;
 
@@ -222,9 +223,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 			return;
 		}
 		TellusGeologyGenerator geology = getGeologyGenerator(seed);
-		int chunkX = chunkPos.getMinBlockX() >> 4;
-		int chunkZ = chunkPos.getMinBlockZ() >> 4;
-		WaterSurfaceResolver.WaterChunkData waterData = this.waterResolver.resolveChunkWaterData(chunkX, chunkZ);
+		WaterSurfaceResolver.WaterChunkData waterData = resolveChunkWaterData(chunkPos);
 		geology.carveChunk(chunk, waterData);
 	}
 
@@ -305,9 +304,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 					this.settings.maxAltitude()
 			);
 		}
-		int chunkX = pos.getMinBlockX() >> 4;
-		int chunkZ = pos.getMinBlockZ() >> 4;
-		WaterSurfaceResolver.WaterChunkData waterData = this.waterResolver.resolveChunkWaterData(chunkX, chunkZ);
+		WaterSurfaceResolver.WaterChunkData waterData = resolveChunkWaterData(pos);
 		BlockState stone = Blocks.STONE.defaultBlockState();
 		BlockState water = Blocks.WATER.defaultBlockState();
 		BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
@@ -710,7 +707,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 			return false;
 		}
 		int coverClass = LAND_COVER_SOURCE.sampleCoverClass(blockX, blockZ, this.settings.worldScale());
-		return coverClass == ESA_NO_DATA;
+		return coverClass == ESA_NO_DATA || coverClass == ESA_WATER;
 	}
 
 	private int sampleSlopeDiff(int worldX, int worldZ, int surface) {
@@ -893,6 +890,16 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 
 	public void prefetchForChunk(int chunkX, int chunkZ) {
 		TellusWorldgenSources.prefetchForChunk(new ChunkPos(chunkX, chunkZ), this.settings);
+	}
+
+	private WaterSurfaceResolver.WaterChunkData resolveChunkWaterData(ChunkPos pos) {
+		WaterChunkCache cache = this.waterChunkCache.get();
+		if (cache.matches(pos)) {
+			return cache.data();
+		}
+		WaterSurfaceResolver.WaterChunkData data = this.waterResolver.resolveChunkWaterData(pos.x, pos.z);
+		cache.update(pos, data);
+		return data;
 	}
 
 	public int sampleCoverClass(int worldX, int worldZ) {
@@ -1466,6 +1473,26 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 				Math.max(Math.abs(east - surface), Math.abs(west - surface)),
 				Math.max(Math.abs(north - surface), Math.abs(south - surface))
 		);
+	}
+
+	private static final class WaterChunkCache {
+		private int chunkX = Integer.MIN_VALUE;
+		private int chunkZ = Integer.MIN_VALUE;
+		private WaterSurfaceResolver.WaterChunkData data;
+
+		private boolean matches(ChunkPos pos) {
+			return this.data != null && this.chunkX == pos.x && this.chunkZ == pos.z;
+		}
+
+		private WaterSurfaceResolver.WaterChunkData data() {
+			return this.data;
+		}
+
+		private void update(ChunkPos pos, WaterSurfaceResolver.WaterChunkData data) {
+			this.chunkX = pos.x;
+			this.chunkZ = pos.z;
+			this.data = data;
+		}
 	}
 
 	private record ColumnHeights(int terrainSurface, int waterSurface, boolean hasWater) {
