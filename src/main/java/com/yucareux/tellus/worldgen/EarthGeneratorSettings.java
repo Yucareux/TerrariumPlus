@@ -55,6 +55,9 @@ public record EarthGeneratorSettings(
 		boolean addTrialChambers,
 		boolean addTrailRuins,
 		boolean distantHorizonsWaterResolver,
+		boolean realtimeTime,
+		boolean realtimeWeather,
+		boolean historicalSnow,
 		DistantHorizonsRenderMode distantHorizonsRenderMode
 ) {
 	public static final double DEFAULT_SPAWN_LATITUDE = 27.9881;
@@ -110,6 +113,9 @@ public record EarthGeneratorSettings(
 			false,
 			false,
 			true,
+			false,
+			false,
+			false,
 			false,
 			DistantHorizonsRenderMode.FAST
 	);
@@ -190,6 +196,15 @@ public record EarthGeneratorSettings(
 	private static final MapCodec<Boolean> DISTANT_HORIZONS_WATER_RESOLVER_CODEC =
 			Codec.BOOL.fieldOf("distant_horizons_water_resolver").orElse(DEFAULT.distantHorizonsWaterResolver());
 
+	private static final MapCodec<Boolean> REALTIME_TIME_CODEC =
+			Codec.BOOL.fieldOf("realtime_time").orElse(DEFAULT.realtimeTime());
+
+	private static final MapCodec<Boolean> REALTIME_WEATHER_CODEC =
+			Codec.BOOL.fieldOf("realtime_weather").orElse(DEFAULT.realtimeWeather());
+
+	private static final MapCodec<Boolean> HISTORICAL_SNOW_CODEC =
+			Codec.BOOL.fieldOf("historical_snow").orElse(DEFAULT.historicalSnow());
+
 	private static final MapCodec<Boolean> GEODES_CODEC =
 			Codec.BOOL.fieldOf("geodes").orElse(DEFAULT.geodes());
 
@@ -229,6 +244,9 @@ public record EarthGeneratorSettings(
 					builder = SEA_LEVEL_CODEC.encode(seaLevel, ops, builder);
 					builder = DISTANT_HORIZONS_RENDER_MODE_CODEC.encode(input.distantHorizonsRenderMode(), ops, builder);
 					builder = DISTANT_HORIZONS_WATER_RESOLVER_CODEC.encode(input.distantHorizonsWaterResolver(), ops, builder);
+					builder = REALTIME_TIME_CODEC.encode(input.realtimeTime(), ops, builder);
+					builder = REALTIME_WEATHER_CODEC.encode(input.realtimeWeather(), ops, builder);
+					builder = HISTORICAL_SNOW_CODEC.encode(input.historicalSnow(), ops, builder);
 					builder = GEODES_CODEC.encode(input.geodes(), ops, builder);
 					builder = LAVA_POOLS_CODEC.encode(input.lavaPools(), ops, builder);
 					builder = STRUCTURE_CODEC.encode(StructureSettings.fromSettings(input), ops, builder);
@@ -240,6 +258,9 @@ public record EarthGeneratorSettings(
 					Stream<T> baseKeys = Stream.concat(BASE_CODEC.keys(ops), SEA_LEVEL_CODEC.keys(ops));
 					baseKeys = Stream.concat(baseKeys, DISTANT_HORIZONS_RENDER_MODE_CODEC.keys(ops));
 					baseKeys = Stream.concat(baseKeys, DISTANT_HORIZONS_WATER_RESOLVER_CODEC.keys(ops));
+					baseKeys = Stream.concat(baseKeys, REALTIME_TIME_CODEC.keys(ops));
+					baseKeys = Stream.concat(baseKeys, REALTIME_WEATHER_CODEC.keys(ops));
+					baseKeys = Stream.concat(baseKeys, HISTORICAL_SNOW_CODEC.keys(ops));
 					baseKeys = Stream.concat(baseKeys, GEODES_CODEC.keys(ops));
 					baseKeys = Stream.concat(baseKeys, LAVA_POOLS_CODEC.keys(ops));
 					Stream<T> structureKeys = Stream.concat(baseKeys, STRUCTURE_CODEC.keys(ops));
@@ -255,6 +276,9 @@ public record EarthGeneratorSettings(
 							DISTANT_HORIZONS_RENDER_MODE_CODEC.decode(ops, input);
 					DataResult<Boolean> distantHorizonsWaterResolver =
 							DISTANT_HORIZONS_WATER_RESOLVER_CODEC.decode(ops, input);
+					DataResult<Boolean> realtimeTime = REALTIME_TIME_CODEC.decode(ops, input);
+					DataResult<Boolean> realtimeWeather = REALTIME_WEATHER_CODEC.decode(ops, input);
+					DataResult<Boolean> historicalSnow = HISTORICAL_SNOW_CODEC.decode(ops, input);
 					DataResult<Boolean> geodes = GEODES_CODEC.decode(ops, input);
 					DataResult<Boolean> lavaPools = LAVA_POOLS_CODEC.decode(ops, input);
 					DataResult<StructureSettings> structures = STRUCTURE_CODEC.decode(ops, input);
@@ -268,7 +292,19 @@ public record EarthGeneratorSettings(
 							EarthGeneratorSettings::applyDistantHorizonsWaterResolver,
 							distantHorizonsWaterResolver
 					);
-					DataResult<SettingsBase> withGeodes = withWaterResolver.apply2(EarthGeneratorSettings::applyGeodes, geodes);
+					DataResult<SettingsBase> withRealtimeTime = withWaterResolver.apply2(
+							EarthGeneratorSettings::applyRealtimeTime,
+							realtimeTime
+					);
+					DataResult<SettingsBase> withRealtimeWeather = withRealtimeTime.apply2(
+							EarthGeneratorSettings::applyRealtimeWeather,
+							realtimeWeather
+					);
+					DataResult<SettingsBase> withHistoricalSnow = withRealtimeWeather.apply2(
+							EarthGeneratorSettings::applyHistoricalSnow,
+							historicalSnow
+					);
+					DataResult<SettingsBase> withGeodes = withHistoricalSnow.apply2(EarthGeneratorSettings::applyGeodes, geodes);
 					DataResult<EarthGeneratorSettings> settings = withGeodes.apply2(EarthGeneratorSettings::applyLavaPools, lavaPools);
 					settings = settings.apply2(EarthGeneratorSettings::withStructureSettings, structures);
 					return settings.apply2(EarthGeneratorSettings::applyTrailRuins, trailRuins);
@@ -279,6 +315,9 @@ public record EarthGeneratorSettings(
 					Stream<T> baseKeys = Stream.concat(BASE_CODEC.keys(ops), SEA_LEVEL_CODEC.keys(ops));
 					baseKeys = Stream.concat(baseKeys, DISTANT_HORIZONS_RENDER_MODE_CODEC.keys(ops));
 					baseKeys = Stream.concat(baseKeys, DISTANT_HORIZONS_WATER_RESOLVER_CODEC.keys(ops));
+					baseKeys = Stream.concat(baseKeys, REALTIME_TIME_CODEC.keys(ops));
+					baseKeys = Stream.concat(baseKeys, REALTIME_WEATHER_CODEC.keys(ops));
+					baseKeys = Stream.concat(baseKeys, HISTORICAL_SNOW_CODEC.keys(ops));
 					baseKeys = Stream.concat(baseKeys, GEODES_CODEC.keys(ops));
 					baseKeys = Stream.concat(baseKeys, LAVA_POOLS_CODEC.keys(ops));
 					Stream<T> structureKeys = Stream.concat(baseKeys, STRUCTURE_CODEC.keys(ops));
@@ -381,6 +420,9 @@ public record EarthGeneratorSettings(
 				Objects.requireNonNull(deepDark, "deepDark").booleanValue(),
 				Objects.requireNonNull(oreDistribution, "oreDistribution").booleanValue(),
 				DEFAULT.distantHorizonsWaterResolver(),
+				DEFAULT.realtimeTime(),
+				DEFAULT.realtimeWeather(),
+				DEFAULT.historicalSnow(),
 				DEFAULT.distantHorizonsRenderMode(),
 				DEFAULT.geodes()
 		);
@@ -418,6 +460,9 @@ public record EarthGeneratorSettings(
 			boolean deepDark,
 			boolean oreDistribution,
 			boolean distantHorizonsWaterResolver,
+			boolean realtimeTime,
+			boolean realtimeWeather,
+			boolean historicalSnow,
 			DistantHorizonsRenderMode distantHorizonsRenderMode,
 			boolean geodes
 	) {
@@ -443,6 +488,9 @@ public record EarthGeneratorSettings(
 					settings.deepDark(),
 					settings.oreDistribution(),
 					settings.distantHorizonsWaterResolver(),
+					settings.realtimeTime(),
+					settings.realtimeWeather(),
+					settings.historicalSnow(),
 					settings.distantHorizonsRenderMode(),
 					settings.geodes()
 			);
@@ -470,6 +518,9 @@ public record EarthGeneratorSettings(
 					this.deepDark,
 					this.oreDistribution,
 					this.distantHorizonsWaterResolver,
+					this.realtimeTime,
+					this.realtimeWeather,
+					this.historicalSnow,
 					this.distantHorizonsRenderMode,
 					this.geodes
 			);
@@ -497,6 +548,9 @@ public record EarthGeneratorSettings(
 					this.deepDark,
 					this.oreDistribution,
 					this.distantHorizonsWaterResolver,
+					this.realtimeTime,
+					this.realtimeWeather,
+					this.historicalSnow,
 					this.distantHorizonsRenderMode,
 					geodes
 			);
@@ -523,6 +577,99 @@ public record EarthGeneratorSettings(
 					this.dripstone,
 					this.deepDark,
 					this.oreDistribution,
+					enabled,
+					this.realtimeTime,
+					this.realtimeWeather,
+					this.historicalSnow,
+					this.distantHorizonsRenderMode,
+					this.geodes
+			);
+		}
+
+		private SettingsBase withRealtimeTime(boolean enabled) {
+			return new SettingsBase(
+					this.worldScale,
+					this.terrestrialHeightScale,
+					this.oceanicHeightScale,
+					this.heightOffset,
+					this.seaLevel,
+					this.spawnLatitude,
+					this.spawnLongitude,
+					this.minAltitude,
+					this.maxAltitude,
+					this.riverLakeShorelineBlend,
+					this.oceanShorelineBlend,
+					this.shorelineBlendCliffLimit,
+					this.caveCarvers,
+					this.largeCaves,
+					this.canyonCarvers,
+					this.aquifers,
+					this.dripstone,
+					this.deepDark,
+					this.oreDistribution,
+					this.distantHorizonsWaterResolver,
+					enabled,
+					this.realtimeWeather,
+					this.historicalSnow,
+					this.distantHorizonsRenderMode,
+					this.geodes
+			);
+		}
+
+		private SettingsBase withRealtimeWeather(boolean enabled) {
+			return new SettingsBase(
+					this.worldScale,
+					this.terrestrialHeightScale,
+					this.oceanicHeightScale,
+					this.heightOffset,
+					this.seaLevel,
+					this.spawnLatitude,
+					this.spawnLongitude,
+					this.minAltitude,
+					this.maxAltitude,
+					this.riverLakeShorelineBlend,
+					this.oceanShorelineBlend,
+					this.shorelineBlendCliffLimit,
+					this.caveCarvers,
+					this.largeCaves,
+					this.canyonCarvers,
+					this.aquifers,
+					this.dripstone,
+					this.deepDark,
+					this.oreDistribution,
+					this.distantHorizonsWaterResolver,
+					this.realtimeTime,
+					enabled,
+					this.historicalSnow,
+					this.distantHorizonsRenderMode,
+					this.geodes
+			);
+		}
+
+		private SettingsBase withHistoricalSnow(boolean enabled) {
+			return new SettingsBase(
+					this.worldScale,
+					this.terrestrialHeightScale,
+					this.oceanicHeightScale,
+					this.heightOffset,
+					this.seaLevel,
+					this.spawnLatitude,
+					this.spawnLongitude,
+					this.minAltitude,
+					this.maxAltitude,
+					this.riverLakeShorelineBlend,
+					this.oceanShorelineBlend,
+					this.shorelineBlendCliffLimit,
+					this.caveCarvers,
+					this.largeCaves,
+					this.canyonCarvers,
+					this.aquifers,
+					this.dripstone,
+					this.deepDark,
+					this.oreDistribution,
+					this.distantHorizonsWaterResolver,
+					this.realtimeTime,
+					this.realtimeWeather,
 					enabled,
 					this.distantHorizonsRenderMode,
 					this.geodes
@@ -551,6 +698,9 @@ public record EarthGeneratorSettings(
 					this.deepDark,
 					this.oreDistribution,
 					this.distantHorizonsWaterResolver,
+					this.realtimeTime,
+					this.realtimeWeather,
+					this.historicalSnow,
 					renderMode,
 					this.geodes
 			);
@@ -597,6 +747,9 @@ public record EarthGeneratorSettings(
 					DEFAULT.addTrialChambers(),
 					DEFAULT.addTrailRuins(),
 					this.distantHorizonsWaterResolver,
+					this.realtimeTime,
+					this.realtimeWeather,
+					this.historicalSnow,
 					this.distantHorizonsRenderMode
 			);
 		}
@@ -631,6 +784,18 @@ public record EarthGeneratorSettings(
 
 	private static SettingsBase applyDistantHorizonsWaterResolver(SettingsBase settings, Boolean enabled) {
 		return settings.withDistantHorizonsWaterResolver(Objects.requireNonNull(enabled, "distantHorizonsWaterResolver").booleanValue());
+	}
+
+	private static SettingsBase applyRealtimeTime(SettingsBase settings, Boolean enabled) {
+		return settings.withRealtimeTime(Objects.requireNonNull(enabled, "realtimeTime").booleanValue());
+	}
+
+	private static SettingsBase applyRealtimeWeather(SettingsBase settings, Boolean enabled) {
+		return settings.withRealtimeWeather(Objects.requireNonNull(enabled, "realtimeWeather").booleanValue());
+	}
+
+	private static SettingsBase applyHistoricalSnow(SettingsBase settings, Boolean enabled) {
+		return settings.withHistoricalSnow(Objects.requireNonNull(enabled, "historicalSnow").booleanValue());
 	}
 
 	private record StructureSettings(
@@ -714,6 +879,9 @@ public record EarthGeneratorSettings(
 				structures.addTrialChambers(),
 				this.addTrailRuins,
 				this.distantHorizonsWaterResolver,
+				this.realtimeTime,
+				this.realtimeWeather,
+				this.historicalSnow,
 				this.distantHorizonsRenderMode
 		);
 	}
@@ -763,6 +931,9 @@ public record EarthGeneratorSettings(
 				this.addTrialChambers,
 				addTrailRuins,
 				this.distantHorizonsWaterResolver,
+				this.realtimeTime,
+				this.realtimeWeather,
+				this.historicalSnow,
 				this.distantHorizonsRenderMode
 		);
 	}

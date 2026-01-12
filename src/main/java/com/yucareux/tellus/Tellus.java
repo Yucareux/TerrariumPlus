@@ -9,6 +9,9 @@ import com.mojang.serialization.JsonOps;
 import com.yucareux.tellus.integration.distant_horizons.DistantHorizonsIntegration;
 import com.yucareux.tellus.network.GeoTpOpenMapPayload;
 import com.yucareux.tellus.network.GeoTpTeleportPayload;
+import com.yucareux.tellus.network.TellusWeatherPayload;
+import com.yucareux.tellus.world.realtime.TellusRealtimeManager;
+import com.yucareux.tellus.world.realtime.TellusRealtimeState;
 import com.yucareux.tellus.worldgen.EarthBiomeSource;
 import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
@@ -17,8 +20,11 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
@@ -27,6 +33,7 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.RegistryOps;
@@ -58,6 +65,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 public class Tellus implements ModInitializer {
@@ -81,6 +89,7 @@ public class Tellus implements ModInitializer {
 			"dynamicDimensionKey"
 	);
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+	private static final TellusRealtimeManager REALTIME_MANAGER = new TellusRealtimeManager();
 
 	// This logger is used to write text to the console and the log file.
 	// It is considered best practice to use your mod id as the logger's name.
@@ -103,14 +112,21 @@ public class Tellus implements ModInitializer {
 				GeoTpOpenMapPayload.TYPE,
 				Objects.requireNonNull(GeoTpOpenMapPayload.CODEC.cast(), "geoTpOpenMapCodec")
 		);
+		PayloadTypeRegistry.playS2C().register(
+				TellusWeatherPayload.TYPE,
+				Objects.requireNonNull(TellusWeatherPayload.CODEC.cast(), "tellusWeatherCodec")
+		);
 		ServerPlayNetworking.registerGlobalReceiver(GeoTpTeleportPayload.TYPE, Tellus::handleGeoTeleport);
-		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> dispatcher.register(
-				Commands.literal("geotp")
-						.then(Commands.literal("map")
-								.requires(source -> source.permissions()
-										.hasPermission(new Permission.HasCommandLevel(PermissionLevel.GAMEMASTERS)))
-								.executes(context -> openGeoTpMap(context.getSource())))
-		));
+		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
+			dispatcher.register(Commands.literal("geotp")
+					.then(Commands.literal("map")
+							.requires(source -> source.permissions()
+									.hasPermission(new Permission.HasCommandLevel(PermissionLevel.GAMEMASTERS)))
+							.executes(context -> openGeoTpMap(context.getSource()))));
+			dispatcher.register(Commands.literal("tellus")
+					.then(Commands.literal("weather")
+							.executes(context -> showTellusWeather(context.getSource()))));
+		});
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			server.execute(() -> {
@@ -127,6 +143,10 @@ public class Tellus implements ModInitializer {
 				}
 			});
 		});
+		ServerLifecycleEvents.SERVER_STOPPING.register(server -> REALTIME_MANAGER.shutdown());
+		ServerTickEvents.END_SERVER_TICK.register(REALTIME_MANAGER::onServerTick);
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
+				REALTIME_MANAGER.onPlayerJoin(server, handler.getPlayer()));
 
 		if (FabricLoader.getInstance().isModLoaded("distanthorizons")) {
 			DistantHorizonsIntegration.bootstrap();
@@ -151,6 +171,121 @@ public class Tellus implements ModInitializer {
 		double longitude = clampLongitude(earthGenerator.longitudeFromBlock(player.getX()));
 		ServerPlayNetworking.send(player, new GeoTpOpenMapPayload(latitude, longitude));
 		return 1;
+	}
+
+	private static int showTellusWeather(CommandSourceStack source) {
+		ServerPlayer player = source.getPlayer();
+		if (player == null) {
+			source.sendFailure(Component.literal("Tellus: /tellus weather can only be used by a player."));
+			return 0;
+		}
+		ServerLevel level = player.level();
+		ChunkGenerator generator = level.getChunkSource().getGenerator();
+		if (!(generator instanceof EarthChunkGenerator earthGenerator)) {
+			source.sendFailure(Component.literal("Tellus: /tellus weather is only available in Tellus worlds."));
+			return 0;
+		}
+
+		BlockPos pos = player.blockPosition();
+		double latitude = clampLatitude(earthGenerator.latitudeFromBlock(pos.getZ()));
+		double longitude = clampLongitude(earthGenerator.longitudeFromBlock(pos.getX()));
+
+		boolean realtimeTime = earthGenerator.settings().realtimeTime();
+		boolean realtimeWeather = earthGenerator.settings().realtimeWeather();
+		boolean realtimeWeatherActive = realtimeWeather && TellusRealtimeState.isWeatherEnabled();
+
+		TellusRealtimeState.PrecipitationMode mode = TellusRealtimeState.precipitationMode();
+		WeatherDisplay weather = realtimeWeatherActive
+				? weatherFromRealtime(mode)
+				: weatherFromVanilla(level, pos);
+
+		int offsetSeconds;
+		boolean approximateTime;
+		if (realtimeTime && REALTIME_MANAGER.hasTimeOffset()) {
+			offsetSeconds = REALTIME_MANAGER.currentUtcOffsetSeconds();
+			approximateTime = false;
+		} else {
+			offsetSeconds = approximateUtcOffsetSeconds(longitude);
+			approximateTime = true;
+		}
+		String timeLabel = formatLocalTime(offsetSeconds);
+		String utcOffsetLabel = formatUtcOffset(offsetSeconds);
+
+		source.sendSuccess(() -> Component.literal("Tellus Weather")
+				.withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
+		String locationText = Objects.requireNonNull(
+				String.format(Locale.ROOT, "%.4f, %.4f", latitude, longitude),
+				"locationText"
+		);
+		source.sendSuccess(() -> Component.literal("Location: ")
+				.withStyle(ChatFormatting.GRAY)
+				.append(Component.literal(locationText).withStyle(ChatFormatting.AQUA)), false);
+		MutableComponent timeLine = Component.literal("Local time: ")
+				.withStyle(ChatFormatting.GRAY)
+				.append(Component.literal(timeLabel + " " + utcOffsetLabel).withStyle(ChatFormatting.YELLOW));
+		if (approximateTime) {
+			timeLine.append(Component.literal(" (approx)").withStyle(ChatFormatting.DARK_GRAY));
+		} else if (!realtimeTime) {
+			timeLine.append(Component.literal(" (world)").withStyle(ChatFormatting.DARK_GRAY));
+		}
+		source.sendSuccess(() -> timeLine, false);
+
+		String weatherLabel = Objects.requireNonNull(weather.label(), "weatherLabel");
+		ChatFormatting weatherColor = Objects.requireNonNull(weather.color(), "weatherColor");
+		MutableComponent weatherLine = Component.literal("Weather: ")
+				.withStyle(ChatFormatting.GRAY)
+				.append(Component.literal(weatherLabel).withStyle(weatherColor));
+		if (!realtimeWeather) {
+			weatherLine.append(Component.literal(" (vanilla)").withStyle(ChatFormatting.DARK_GRAY));
+		} else if (!realtimeWeatherActive) {
+			weatherLine.append(Component.literal(" (real-time pending)").withStyle(ChatFormatting.DARK_GRAY));
+		}
+		source.sendSuccess(() -> weatherLine, false);
+		return 1;
+	}
+
+	private static WeatherDisplay weatherFromRealtime(TellusRealtimeState.PrecipitationMode mode) {
+		return switch (mode) {
+			case THUNDER -> new WeatherDisplay("Thunder", ChatFormatting.DARK_PURPLE);
+			case SNOW -> new WeatherDisplay("Snow", ChatFormatting.AQUA);
+			case RAIN -> new WeatherDisplay("Rain", ChatFormatting.BLUE);
+			case CLEAR -> new WeatherDisplay("Clear", ChatFormatting.GREEN);
+		};
+	}
+
+	private static WeatherDisplay weatherFromVanilla(ServerLevel level, @NonNull BlockPos pos) {
+		if (level.isThundering()) {
+			return new WeatherDisplay("Thunder", ChatFormatting.DARK_PURPLE);
+		}
+		if (level.isRainingAt(pos)) {
+			var biome = level.getBiome(pos).value();
+			boolean snow = biome.getPrecipitationAt(pos, level.getSeaLevel()) == net.minecraft.world.level.biome.Biome.Precipitation.SNOW;
+			return new WeatherDisplay(snow ? "Snow" : "Rain", snow ? ChatFormatting.AQUA : ChatFormatting.BLUE);
+		}
+		return new WeatherDisplay("Clear", ChatFormatting.GREEN);
+	}
+
+	private static int approximateUtcOffsetSeconds(double longitude) {
+		double hours = longitude / 15.0;
+		return (int) Math.round(hours * 3600.0);
+	}
+
+	private static String formatLocalTime(int offsetSeconds) {
+		long localSeconds = System.currentTimeMillis() / 1000L + offsetSeconds;
+		long daySeconds = Math.floorMod(localSeconds, 86_400L);
+		int hour = (int) (daySeconds / 3600L);
+		int minute = (int) ((daySeconds % 3600L) / 60L);
+		return String.format(Locale.ROOT, "%02d:%02d", hour, minute);
+	}
+
+	private static String formatUtcOffset(int offsetSeconds) {
+		int totalMinutes = offsetSeconds / 60;
+		int hours = totalMinutes / 60;
+		int minutes = Math.abs(totalMinutes % 60);
+		return String.format(Locale.ROOT, "UTC%+03d:%02d", hours, minutes);
+	}
+
+	private record WeatherDisplay(String label, ChatFormatting color) {
 	}
 
 	private static void handleGeoTeleport(GeoTpTeleportPayload payload, ServerPlayNetworking.Context context) {

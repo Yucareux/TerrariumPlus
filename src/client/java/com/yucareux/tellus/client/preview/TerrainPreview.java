@@ -181,6 +181,9 @@ public final class TerrainPreview implements AutoCloseable {
 		double step = (radius * 2.0) / (size - 1);
 
 		for (int z = 0; z < size; z++) {
+			if (Thread.currentThread().isInterrupted()) {
+				return null;
+			}
 			double blockZ = centerZ - radius + z * step;
 			for (int x = 0; x < size; x++) {
 				double blockX = centerX - radius + x * step;
@@ -215,6 +218,9 @@ public final class TerrainPreview implements AutoCloseable {
 		int coverSize = (size + coverStride - 1) / coverStride;
 		int[] coverClasses = new int[coverSize * coverSize];
 		for (int z = 0; z < coverSize; z++) {
+			if (Thread.currentThread().isInterrupted()) {
+				return null;
+			}
 			int sampleZ = Math.min(size - 1, z * coverStride);
 			double blockZ = centerZ - radius + sampleZ * step;
 			for (int x = 0; x < coverSize; x++) {
@@ -229,6 +235,9 @@ public final class TerrainPreview implements AutoCloseable {
 		int climateSize = (size + climateStride - 1) / climateStride;
 		byte[] climateGroups = new byte[climateSize * climateSize];
 		for (int z = 0; z < climateSize; z++) {
+			if (Thread.currentThread().isInterrupted()) {
+				return null;
+			}
 			int sampleZ = Math.min(size - 1, z * climateStride);
 			double blockZ = centerZ - radius + sampleZ * step;
 			for (int x = 0; x < climateSize; x++) {
@@ -243,6 +252,9 @@ public final class TerrainPreview implements AutoCloseable {
 		int seaLevel = settings.resolveSeaLevel();
 		int[] colors = new int[size * size];
 		for (int z = 0; z < size; z++) {
+			if (Thread.currentThread().isInterrupted()) {
+				return null;
+			}
 			int coverZ = Math.min(coverSize - 1, z / coverStride);
 			int climateZ = Math.min(climateSize - 1, z / climateStride);
 			for (int x = 0; x < size; x++) {

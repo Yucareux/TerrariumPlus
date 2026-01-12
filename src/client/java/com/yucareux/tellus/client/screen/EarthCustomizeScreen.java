@@ -92,7 +92,6 @@ public class EarthCustomizeScreen extends Screen {
 	private long previewDirtyAt = -1L;
 	private double spawnLatitude = EarthGeneratorSettings.DEFAULT_SPAWN_LATITUDE;
 	private double spawnLongitude = EarthGeneratorSettings.DEFAULT_SPAWN_LONGITUDE;
-	private @Nullable CategoryDefinition activeCategory;
 
 	public EarthCustomizeScreen(CreateWorldScreen parent, WorldCreationContext worldCreationContext) {
 		super(TITLE);
@@ -406,6 +405,9 @@ public class EarthCustomizeScreen extends Screen {
 				"distant_horizons_water_resolver",
 				EarthGeneratorSettings.DEFAULT.distantHorizonsWaterResolver()
 		);
+		boolean realtimeTime = this.findToggleValue("realtime_time", EarthGeneratorSettings.DEFAULT.realtimeTime());
+		boolean realtimeWeather = this.findToggleValue("realtime_weather", EarthGeneratorSettings.DEFAULT.realtimeWeather());
+		boolean historicalSnow = this.findToggleValue("historical_snow", EarthGeneratorSettings.DEFAULT.historicalSnow());
 		EarthGeneratorSettings.DistantHorizonsRenderMode renderMode = this.findRenderMode(
 				"distant_horizons_render_mode",
 				EarthGeneratorSettings.DEFAULT.distantHorizonsRenderMode()
@@ -450,6 +452,9 @@ public class EarthCustomizeScreen extends Screen {
 				addTrialChambers,
 				addTrailRuins,
 				distantHorizonsWaterResolver,
+				realtimeTime,
+				realtimeWeather,
+				historicalSnow,
 				renderMode
 		);
 	}
@@ -573,6 +578,12 @@ public class EarthCustomizeScreen extends Screen {
 				mode("distant_horizons_render_mode", EarthGeneratorSettings.DEFAULT.distantHorizonsRenderMode()),
 				toggle("distant_horizons_water_resolver", EarthGeneratorSettings.DEFAULT.distantHorizonsWaterResolver()),
 				comingSoonButton()
+		)));
+
+		categories.add(new CategoryDefinition("realtime", List.of(
+				toggle("realtime_time", EarthGeneratorSettings.DEFAULT.realtimeTime()),
+				toggle("realtime_weather", EarthGeneratorSettings.DEFAULT.realtimeWeather()),
+				toggle("historical_snow", EarthGeneratorSettings.DEFAULT.historicalSnow())
 		)));
 
 		return categories;
@@ -818,7 +829,6 @@ public class EarthCustomizeScreen extends Screen {
 
 	private void showCategories() {
 		this.list.clear();
-		this.activeCategory = null;
 		for (CategoryDefinition category : this.categories) {
 			Component label = Objects.requireNonNull(category.getLabel(), "categoryLabel");
 			Button button = Button.builder(label, btn -> this.showCategory(category))
@@ -831,7 +841,6 @@ public class EarthCustomizeScreen extends Screen {
 
 	private void showCategory(CategoryDefinition category) {
 		this.list.clear();
-		this.activeCategory = category;
 		Component backLabel = Objects.requireNonNull(Component.translatable("gui.back"), "backLabel");
 		Button back = Button.builder(backLabel, btn -> this.showCategories())
 				.bounds(0, 0, this.list.getRowWidth(), ENTRY_HEIGHT)
