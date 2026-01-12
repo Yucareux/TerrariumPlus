@@ -12,6 +12,7 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -448,6 +449,9 @@ public final class TellusLandCoverSource {
 			byte[] tile;
 			try {
 				tile = getTile(tileIndex);
+			} catch (ClosedByInterruptException e) {
+				Thread.currentThread().interrupt();
+				return 0;
 			} catch (IOException e) {
 				Tellus.LOGGER.warn("Failed to read land cover tile {} in {}", tileIndex, this.path, e);
 				return 0;
